@@ -274,10 +274,12 @@ def test_a_scan_with_nothing_else_to_run_does_not_start_a_lane(
 
 def measure_recheck_allowance(
     repository: Repository, preferences: Preferences, *, lane_seconds: float
-) -> tuple[dict[str, tuple[float, float]], float]:
-    """How much recheck time each source was handed, and when it asked."""
+) -> tuple[dict[str, tuple[float, float]], float, dict[str, tuple[float, float]]]:
+    """How much recheck time each source was handed and when it asked, when
+    the lane finished, and each source's search and recheck deadlines."""
     handed: dict[str, tuple[float, float]] = {}
     ended: dict[str, float] = {}
+    deadlines: dict[str, list[float]] = {}
 
     def lane_search(client):
         time.sleep(lane_seconds)
@@ -287,15 +289,22 @@ def measure_recheck_allowance(
     main = Stub("Main")
     scanner = Scanner(repository, lambda: preferences, [lane, main], detail_delay_seconds=0)
     original = scanner._recheck_absent
+    original_search = scanner._search_within_ceiling
 
     def spy(client, source, preferences, **kwargs):
         now = scanner._clock()
         handed[source.platform] = (kwargs["deadline"] - now, now)
+        deadlines.setdefault(source.platform, []).append(kwargs["deadline"])
         return original(client, source, preferences, **kwargs)
 
+    def spy_search(source, client, preferences, trigger, *, deadline):
+        deadlines.setdefault(source.platform, []).insert(0, deadline)
+        return original_search(source, client, preferences, trigger, deadline=deadline)
+
     scanner._recheck_absent = spy
+    scanner._search_within_ceiling = spy_search
     scanner.run_scan("manual")
-    return handed, ended["at"]
+    return handed, ended["at"], {platform: tuple(pair) for platform, pair in deadlines.items()}
 
 
 def test_no_source_is_handed_more_recheck_time_than_a_sequential_scan_gives_it(
@@ -314,11 +323,11 @@ def test_no_source_is_handed_more_recheck_time_than_a_sequential_scan_gives_it(
     """
     lane_seconds = 0.5
     monkeypatch.setenv(SEQUENTIAL, "1")
-    sequential, _ = measure_recheck_allowance(
+    sequential, _, sequential_deadlines = measure_recheck_allowance(
         fresh(tmp_path, "sequential"), preferences, lane_seconds=lane_seconds
     )
     monkeypatch.delenv(SEQUENTIAL)
-    laned, lane_ended = measure_recheck_allowance(
+    laned, lane_ended, laned_deadlines = measure_recheck_allowance(
         fresh(tmp_path, "laned"), preferences, lane_seconds=lane_seconds
     )
 
@@ -329,8 +338,13 @@ def test_no_source_is_handed_more_recheck_time_than_a_sequential_scan_gives_it(
         f"{sequential['Main'][0]:.3f}s in turn"
     )
     # Craigslist's own allowance is what it always was: it was first in line
-    # and it still starts when the scan does.
-    assert abs(laned["Lane"][0] - sequential["Lane"][0]) <= tolerance
+    # and it still starts when the scan does, so its recheck is handed the
+    # scan's real deadline -- the one its search ran to -- exactly as in turn.
+    # Asserted on the deadline itself rather than on seconds measured in two
+    # separate scans, which a slower machine made differ by a tenth.
+    for deadlines in (sequential_deadlines, laned_deadlines):
+        searched, rechecked = deadlines["Lane"]
+        assert rechecked == searched, "Craigslist's own recheck was charged"
 
 
 def test_once_the_lane_is_over_the_shift_is_exactly_its_time(
@@ -1131,13 +1145,14 @@ def test_a_lane_quicker_than_usual_never_costs_a_source_its_turn(
         [lane, *mains],
         detail_delay_seconds=0,
         timeout_seconds=0.1,
-        max_scan_seconds=1.2,
+        max_scan_seconds=2.0,
     )
-    # Craigslist usually takes nearly the whole scan; this time it takes 0.3s.
+    # Craigslist usually takes nearly the whole scan; this time it takes 0.3s,
+    # leaving over a second to spare however slow the machine running this is.
     monkeypatch.setattr(
         scanner,
         "_source_weights",
-        lambda sources: {source.platform: 1.15 if source.platform == "Lane" else 0.05 for source in sources},
+        lambda sources: {source.platform: 1.95 if source.platform == "Lane" else 0.05 for source in sources},
     )
     original = scanner._seconds_until_readable
 
