@@ -4991,6 +4991,14 @@ class FurnishedFinderSource:
 class CraigslistSource:
     platform = "Craigslist"
     mode = "automatic"
+    # Read on its own lane, alongside the rest of a scan rather than ahead of
+    # it. The only source that does: it is served from Craigslist's own
+    # addresses and shares no infrastructure with the portals behind
+    # CloudFront, several of which already turn the app away, so reading it at
+    # the same time as them changes nothing any site sees. It was 25 of the 29
+    # seconds of a first search. Any other source opting in needs the same
+    # argument made for it, and tests/test_scan_lanes.py fails if one does.
+    runs_in_own_lane = True
     room_search_url = "https://sfbay.craigslist.org/search/sfc/roo"
     sublet_search_url = "https://sfbay.craigslist.org/search/sfc/sub"
     unit_search_url = "https://sfbay.craigslist.org/search/sfc/apa"

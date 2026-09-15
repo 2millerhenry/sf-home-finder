@@ -33,7 +33,7 @@
     () => "Anything a listing leaves unsaid becomes a check on the home, not a reason to drop it.",
     () => "Homes you have already been shown are updated rather than listed twice.",
     () => "Matching addresses, so one building on three sites stays one home.",
-    () => "Sources are read one at a time, so none of them starts turning us away.",
+    () => "Each site is read one page at a time, so none of them starts turning us away.",
     () => "Homes appear as each source finishes. Nothing waits for the last one.",
     () => "Re-checking whether the homes on your shortlist are still going.",
   ];
