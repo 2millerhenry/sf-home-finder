@@ -131,7 +131,7 @@ try {
   $stagePython = Join-Path $stageRuntime 'Scripts\python.exe'
   Invoke-Uv -Arguments @('pip', 'sync', $LockFile, '--python', $stagePython, '--strict', '--no-progress')
   Invoke-Uv -Arguments @('pip', 'install', $WheelFile, '--python', $stagePython, '--no-deps', '--no-progress')
-  & $stagePython -c "import sf_housing; assert sf_housing.__version__ == '$Version'"
+  & $stagePython -I -c "import sf_housing; assert sf_housing.__version__ == '$Version'"
   if ($LASTEXITCODE -ne 0) { Fail 'the installed app did not pass its version check.' }
 
   if ((Test-Path -LiteralPath (Join-Path $DataDir 'housing.sqlite3')) -and (Test-Path -LiteralPath (Join-Path $RuntimeTarget 'Scripts\python.exe'))) {

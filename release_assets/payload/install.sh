@@ -72,7 +72,7 @@ export UV_PYTHON_INSTALL_DIR="$APP_ROOT/python"
 "$UV_BIN" venv "$STAGE/runtime" --python "$PYTHON_VERSION" --managed-python --no-project --quiet
 "$UV_BIN" pip sync "$LOCK_FILE" --python "$STAGE/runtime/bin/python" --strict --no-progress --quiet
 "$UV_BIN" pip install "$WHEEL_FILE" --python "$STAGE/runtime/bin/python" --no-deps --no-progress --quiet
-"$STAGE/runtime/bin/python" -c 'import sf_housing; assert sf_housing.__version__ == "0.5.4"'
+"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.4"'
 
 if [ -f "$DATA_DIR/housing.sqlite3" ] && [ -x "$APP_ROOT/current/bin/python" ]; then
   /bin/mkdir -p "$APP_ROOT/backups"
