@@ -1,3 +1,23 @@
+SF Home Finder 0.5.4
+
+Checking for new homes takes less time, the very first check included.
+
+Every source was read strictly one after another, so the wait was all of them
+added together. Craigslist runs on its own servers and shares nothing with the
+other sites, so it is now read alongside the rest instead of ahead of them, and
+a check is shorter by about as long as Craigslist takes.
+
+No site is asked for anything more than it was. Each is still read one page at
+a time, and every other source is read in the same order and at the same pace
+as before. Where the app decides by the clock how much to read -- whether a
+source still fits in the time limit, how many listings to open, how many older
+homes to look in on -- each source is still given only the time it would have
+had waiting its turn behind Craigslist, so being reached sooner never means
+asking for more.
+
+If this ever turns out to cost something, SF_HOUSING_SEQUENTIAL_SCAN=1 puts
+every source back in one line exactly as it was.
+
 SF Home Finder 0.5.3
 
 Upgrading on Windows could fail part way through. The installer asked the
