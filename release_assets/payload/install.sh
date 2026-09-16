@@ -3,7 +3,7 @@ set -euo pipefail
 
 RELEASE_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 PAYLOAD_DIR="$RELEASE_ROOT/payload"
-VERSION="0.5.5"
+VERSION="0.5.6"
 PYTHON_VERSION="3.12.10"
 PORT="${SF_HOUSING_PORT:-8000}"
 APP_ROOT="${SF_HOUSING_APP_ROOT:-$HOME/Library/Application Support/SF Housing Monitor}"
@@ -26,7 +26,7 @@ RUNTIMES_DIR="$APP_ROOT/runtimes"
 RELEASES_DIR="$APP_ROOT/releases"
 UV_BIN="$PAYLOAD_DIR/uv"
 LOCK_FILE="$PAYLOAD_DIR/requirements.lock"
-WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.5-py3-none-any.whl"
+WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.6-py3-none-any.whl"
 
 say() { printf '%s\n' "$*"; }
 fail() { say "Installation stopped: $*"; exit 1; }
@@ -72,7 +72,7 @@ export UV_PYTHON_INSTALL_DIR="$APP_ROOT/python"
 "$UV_BIN" venv "$STAGE/runtime" --python "$PYTHON_VERSION" --managed-python --no-project --quiet
 "$UV_BIN" pip sync "$LOCK_FILE" --python "$STAGE/runtime/bin/python" --strict --no-progress --quiet
 "$UV_BIN" pip install "$WHEEL_FILE" --python "$STAGE/runtime/bin/python" --no-deps --no-progress --quiet
-"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.5"'
+"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.6"'
 
 if [ -f "$DATA_DIR/housing.sqlite3" ] && [ -x "$APP_ROOT/current/bin/python" ]; then
   /bin/mkdir -p "$APP_ROOT/backups"
@@ -267,6 +267,15 @@ if [ "${CLI_READY:-0}" = 1 ] && [ "${CLI_ON_PATH:-0}" != 1 ]; then
   say "The 'homefinder' command lives in $CLI_DIR, which this Terminal window"
   say "does not know about yet."
   say ""
+  # The profile above is the file this shell reads first. The others it may
+  # read, fish's own syntax, a stale homefinder earlier on the PATH, and a
+  # check that a new shell can really find the command rather than a promise
+  # that it will, are one job with its own tool -- which Repair can run too,
+  # and which skips any file that already knows the way.
+  if [ -f "$PAYLOAD_DIR/tools/put-command-on-path.sh" ]; then
+    /bin/bash "$PAYLOAD_DIR/tools/put-command-on-path.sh" "$CLI_DIR" || true
+    say ""
+  fi
   if [ -n "$PROFILE" ]; then
     say "  In this window:     source $PROFILE"
     say "  Or run it directly: $CLI_DIR/homefinder"
