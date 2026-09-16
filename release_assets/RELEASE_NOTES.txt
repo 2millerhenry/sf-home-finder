@@ -39,7 +39,9 @@ on the shortlist: on a real board 7,785 homes, of which 7,625 had been ruled
 out for the wrong number of bedrooms or twice the budget. It now holds homes
 that missed by one thing -- a few points short of your cut-off, or a little
 over your budget -- and every row leads with which, in money: "$120/mo over
-your budget" rather than a rule about maximums. That distinction could not be
+your budget" rather than a rule about maximums. The nearest miss is at the
+top: a home $30 over your budget comes before one $300 over, and a home a
+point short of your cut-off before one nine points short, on one scale. That distinction could not be
 drawn before, because a home $120 over the line and one at four times the
 budget scored the same; how far past the line the rent fell is now written
 down when the home is judged. Everything else collected is still in the full

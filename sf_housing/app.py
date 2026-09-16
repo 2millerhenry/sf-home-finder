@@ -120,7 +120,7 @@ def spelled_count(value: int) -> str:
     return _SPELLED[value] if 0 <= value < len(_SPELLED) else str(value)
 
 
-VALID_SORTS = frozenset({"score", "contact", "available", "newest", "price", "unopened"})
+VALID_SORTS = frozenset({"score", "contact", "available", "newest", "price", "unopened", "closeness"})
 VALID_VIEWS = frozenset({"active", "saved", "dismissed", "near_matches", "all"})
 # Older links said whole_unit or lumped the splits together; send them to the
 # first size they actually cover rather than 404ing a bookmark.

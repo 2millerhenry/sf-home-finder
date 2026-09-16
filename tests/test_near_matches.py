@@ -50,7 +50,8 @@ def board(tmp_path: Path) -> Repository:
 
 
 def add(repository: Repository, title: str, *, score: int, eligibility: str,
-        reasons: list[str], maximum: int | None = None, over_by: int | None = None) -> None:
+        reasons: list[str], maximum: int | None = None, over_by: int | None = None,
+        price: int = 2000) -> None:
     """One more home on the board, judged the way the scorer would have judged it."""
     import json
 
@@ -60,12 +61,20 @@ def add(repository: Repository, title: str, *, score: int, eligibility: str,
             "INSERT INTO listings (platform, source_id, title, original_url, canonical_url, price,"
             " housing_kind, concern, score, eligibility, eligibility_reasons_json, score_details_json,"
             " status, first_found, last_seen)"
-            " VALUES ('Craigslist', ?, ?, ?, ?, 2000, 'room', '', ?, ?, ?, ?, 'active',"
+            " VALUES ('Craigslist', ?, ?, ?, ?, ?, 'room', '', ?, ?, ?, ?, 'active',"
             " datetime('now'), datetime('now'))",
             (title, title, f"https://example.test/{title}", f"https://example.test/{title}",
-             score, eligibility, json.dumps(reasons), json.dumps(details)),
+             price, score, eligibility, json.dumps(reasons), json.dumps(details)),
         )
         connection.commit()
+
+
+def empty_board(tmp_path: Path) -> Repository:
+    """A board with nothing on it, for the tests about order rather than
+    membership: the seeded board would put its own near misses in the list."""
+    repository = Repository(tmp_path / "housing.sqlite3")
+    repository.initialize()
+    return repository
 
 
 def near_matches(repository: Repository) -> set[str]:
@@ -217,3 +226,129 @@ def test_a_room_far_over_the_budget_is_not_a_near_match(tmp_path: Path) -> None:
         reasons=[], maximum=2000, over_by=1800)
 
     assert "room far over" not in near_matches(repository)
+
+
+# --- Nearest miss first -----------------------------------------------------
+
+
+def four_kinds_of_miss(tmp_path: Path) -> Repository:
+    """One board holding both shapes of near miss, at both distances."""
+    repository = empty_board(tmp_path)
+    add(repository, "forty over", score=49, eligibility="ineligible",
+        reasons=["The monthly price exceeds this path's maximum."], maximum=3000, over_by=40)
+    add(repository, "three hundred over", score=49, eligibility="ineligible",
+        reasons=["The monthly price exceeds this path's maximum."], maximum=3000, over_by=300)
+    add(repository, "one point short", score=CUT_OFF - 1, eligibility="eligible", reasons=[])
+    add(repository, "nine points short", score=CUT_OFF - 9, eligibility="eligible", reasons=[])
+    return repository
+
+
+def in_order(repository: Repository, sort: str = "closeness") -> list[str]:
+    return [
+        row["title"]
+        for row in repository.query_listings(minimum_score=CUT_OFF, view="near_matches", sort=sort)
+    ]
+
+
+def test_the_nearest_miss_comes_first(tmp_path: Path) -> None:
+    """Sorted by score this list is nonsense: every home ruled out for its rent
+    is capped at about 49 whatever it costs, so a home $40 over sits at random
+    among homes at four times the budget. Each kind of miss is measured
+    against its own allowance -- points against the ten below the cut-off,
+    money against the tenth over the line -- so the two can be compared."""
+    assert in_order(four_kinds_of_miss(tmp_path)) == [
+        "one point short",      # a tenth of the way to falling out
+        "forty over",           # $40 of the $300 it is allowed
+        "nine points short",    # nine of its ten points
+        "three hundred over",   # the whole allowance
+    ]
+
+
+def test_a_room_is_judged_by_its_nearest_miss(tmp_path: Path) -> None:
+    """A room over the rent line is capped at 54 rather than ruled out, so it
+    is short on points *and* over on money. Judging it by the worse of the two
+    would bury a room fifty dollars over behind homes that missed by more."""
+    repository = empty_board(tmp_path)
+    add(repository, "room just over", score=54, eligibility="eligible", reasons=[],
+        maximum=2000, over_by=100)
+    add(repository, "nine points short", score=CUT_OFF - 9, eligibility="eligible", reasons=[])
+
+    assert in_order(repository) == ["room just over", "nine points short"]
+
+
+def test_choosing_another_sort_still_wins(tmp_path: Path) -> None:
+    """The closeness order is what the tab offers, not something imposed: the
+    column headings and the sort control still do what they say."""
+    repository = four_kinds_of_miss(tmp_path)
+    add(repository, "cheapest", score=CUT_OFF - 2, eligibility="eligible", reasons=[], price=900)
+
+    assert in_order(repository, sort="price")[0] == "cheapest"
+
+
+def test_the_sort_changes_the_order_and_never_the_homes(tmp_path: Path) -> None:
+    """Ordering is not filtering. Whatever it is sorted by, the near matches
+    are the same near matches."""
+    repository = four_kinds_of_miss(tmp_path)
+
+    assert sorted(in_order(repository)) == sorted(in_order(repository, sort="score"))
+
+
+def test_a_home_nobody_can_measure_sorts_last_rather_than_raising(tmp_path: Path) -> None:
+    """Rows scored before this shipped carry no gap at all. They cannot reach
+    this view today, but a sort that divided by a missing ceiling would take
+    the whole page down rather than put one row in the wrong place."""
+    from sf_housing.database import near_miss_distance
+
+    assert near_miss_distance({"score": 60}, 0) == float("inf")
+    assert near_miss_distance({"score": 60, "over_budget_by": 50, "budget_maximum": 0}, 0) == float("inf")
+    assert near_miss_distance({}, CUT_OFF) == 1.0 * CUT_OFF / NEAR_MATCH_MARGIN
+
+
+# --- What somebody actually clicks ------------------------------------------
+
+
+def dashboard(tmp_path: Path, view: str = "near_matches", sort: str = "closeness") -> str:
+    """The real page, built the way the app builds it."""
+    from fastapi.testclient import TestClient
+
+    from sf_housing.app import create_app
+    from sf_housing.settings import Settings
+    from tests.conftest import TEST_PREFERENCES
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    preferences_path = tmp_path / "preferences.yaml"
+    preferences_path.write_text(TEST_PREFERENCES, encoding="utf-8")
+    settings = Settings(
+        data_dir=data_dir,
+        preferences_path=preferences_path,
+        database_path=data_dir / "housing.sqlite3",
+        log_path=data_dir / "test.log",
+    )
+    application = create_app(settings=settings, sources=[], enable_scheduler=False)
+    with TestClient(application) as client:
+        return client.get(f"/?view={view}&sort={sort}").text
+
+
+def test_the_near_matches_tab_asks_for_the_nearest_first(tmp_path: Path) -> None:
+    """An order nothing asks for is an order nobody sees: the tab is how this
+    list is reached."""
+    assert "view=near_matches&amp;sort=closeness" in dashboard(tmp_path)
+
+
+def test_closest_first_is_offered_only_where_it_means_something(tmp_path: Path) -> None:
+    """On the shortlist every home is above the cut-off and none is over the
+    line, so "closest" would order nothing. The control should not offer an
+    order that does nothing."""
+    assert 'value="closeness"' in dashboard(tmp_path, view="near_matches")
+    assert 'value="closeness"' not in dashboard(tmp_path, view="active", sort="score")
+
+
+def test_arriving_at_near_matches_does_not_look_like_a_changed_setting(tmp_path: Path) -> None:
+    """The control marks itself when somebody has chosen something other than
+    the default. Closest first is the default here, so arriving must not look
+    like an edit."""
+    page = dashboard(tmp_path, view="near_matches", sort="closeness")
+    control = page[page.index('<select name="sort"'):page.index("</select>")]
+
+    assert "is-selected" not in control

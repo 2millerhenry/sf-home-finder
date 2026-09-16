@@ -96,7 +96,7 @@
     {#- The two a person moves between, side by side and carrying a little more
         weight than the three that are history. -#}
     <a class="lead-view{% if view == 'active' %} active{% endif %}" href="/?housing={{ housing_mode }}&amp;view=active&amp;sort=score" {% if view == 'active' %}aria-current="page"{% endif %}>Shortlist</a>
-    <a class="lead-view{% if view == 'near_matches' %} active{% endif %}" href="/?housing={{ housing_mode }}&amp;view=near_matches&amp;sort=score" {% if view == 'near_matches' %}aria-current="page"{% endif %}>Near matches</a>
+    <a class="lead-view{% if view == 'near_matches' %} active{% endif %}" href="/?housing={{ housing_mode }}&amp;view=near_matches&amp;sort=closeness" {% if view == 'near_matches' %}aria-current="page"{% endif %}>Near matches</a>
     <a href="/?housing={{ housing_mode }}&amp;view=saved&amp;sort=score" {% if view == 'saved' %}class="active" aria-current="page"{% endif %}>Saved</a>
     <a href="/?housing={{ housing_mode }}&amp;view=dismissed&amp;sort=newest" {% if view == 'dismissed' %}class="active" aria-current="page"{% endif %}>Passed</a>
     <a href="/?housing={{ housing_mode }}&amp;view=all&amp;sort=score" {% if view == 'all' %}class="active" aria-current="page"{% endif %}>Archive</a>
@@ -106,7 +106,12 @@
     <input type="hidden" name="view" value="{{ view }}">
     <input type="hidden" name="housing" value="{{ housing_mode }}">
     <label>Order
-      <select name="sort" data-auto-submit-order{% if sort != 'score' %} class="is-selected"{% endif %}>
+      {# Closest first is the order the near-matches tab arrives in, so there it
+         is the default rather than a change somebody made: marking the control
+         as changed by default would make every visit look edited. #}
+      {%- set default_sort = 'closeness' if view == 'near_matches' else 'score' -%}
+      <select name="sort" data-auto-submit-order{% if sort != default_sort %} class="is-selected"{% endif %}>
+        {% if view == 'near_matches' %}<option value="closeness" {% if sort == 'closeness' %}selected{% endif %}>Closest first</option>{% endif %}
         <option value="score" {% if sort == 'score' %}selected{% endif %}>Best match</option>
         <option value="contact" {% if sort == 'contact' %}selected{% endif %}>Fastest to contact</option>
         <option value="available" {% if sort == 'available' %}selected{% endif %}>Soonest move-in</option>

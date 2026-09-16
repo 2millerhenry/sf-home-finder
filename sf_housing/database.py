@@ -210,6 +210,38 @@ NEAR_MATCH_MARGIN = 10
 NEAR_MATCH_OVER_BUDGET = 0.10
 
 
+def near_miss_distance(item: dict[str, Any], minimum_score: int) -> float:
+    """How near this home came, as a fraction of the way to being excluded.
+
+    Near matches holds two kinds of miss that cannot be compared as they
+    stand: points short of the cut-off, and money over the rent line. Scoring
+    flattens both -- a whole home ruled out for its rent lands near 49 whatever
+    it costs, and a room over the line is capped at 54 -- so on a real board
+    the best of them all scored 49 while costing $5,430 to $12,400 against a
+    $3,000 deal. Sorted by score, a home $40 over sat at random among homes at
+    four times the budget.
+
+    So each kind is measured against its own allowance: points against the ten
+    below the cut-off this view holds, money against the tenth over the line.
+    0.0 is on the line and 1.0 is the edge of what the view holds, which makes
+    the two comparable. A home that is both -- a room is capped for its rent,
+    which leaves it short on points as well -- is judged by whichever miss is
+    the nearer, because that is the one somebody would forgive.
+
+    Never raises and never divides by a missing ceiling: a row stored before
+    any of this shipped is put last rather than taking the page down with it.
+    """
+    distances: list[float] = []
+    score = int(item.get("score") or 0)
+    if minimum_score > 0 and NEAR_MATCH_MARGIN > 0 and score < minimum_score:
+        distances.append((minimum_score - score) / NEAR_MATCH_MARGIN)
+    over_by = int(item.get("over_budget_by") or 0)
+    maximum = int(item.get("budget_maximum") or 0)
+    if over_by > 0 and maximum > 0 and NEAR_MATCH_OVER_BUDGET > 0:
+        distances.append(over_by / (maximum * NEAR_MATCH_OVER_BUDGET))
+    return min(distances) if distances else float("inf")
+
+
 class Repository:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -754,13 +786,24 @@ class Repository:
             # homes at the top, then preserve the normal recommendation order
             # within each group so the sort stays useful rather than arbitrary.
             "unopened": "opened_at IS NOT NULL ASC, score DESC, first_found DESC",
+            # Ordered by score here and re-ordered by how near each home came
+            # once the rows are in hand: the gap lives in JSON no ORDER BY can
+            # reach cheaply, and sorting in Python afterwards is stable, so
+            # homes that missed by the same amount keep the order they had
+            # rather than shuffling between one refresh and the next.
+            "closeness": "score DESC, confidence DESC, COALESCE(published_at, first_found) DESC",
         }.get(sort, "first_found DESC, score DESC")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"SELECT * FROM listings{where} ORDER BY {order_by}"
         with self.connection() as connection:
             rows = connection.execute(sql, parameters).fetchall()
         items = [self._dashboard_row(row) for row in rows]
-        if sort == "available":
+        if sort == "closeness" and view == "near_matches":
+            # Only where it means something. Asked for anywhere else -- a stale
+            # link, or the control left on it while switching tabs -- the rows
+            # keep the score order the query already gave them.
+            items.sort(key=lambda item: near_miss_distance(item, minimum_score))
+        elif sort == "available":
             items.sort(
                 key=lambda item: (
                     not bool(item.get("available_on")),
@@ -1010,6 +1053,7 @@ class Repository:
         price_detail = score_details.get("price") or {}
         over_by = price_detail.get("over_by") or 0
         item["over_budget_by"] = int(over_by)
+        item["budget_maximum"] = int(price_detail.get("maximum") or 0)
         # How long since anyone confirmed the source still lists this home. A
         # score says how well it fits; it says nothing about whether the home is
         # still there, and a home nobody has confirmed for a day is not one the
