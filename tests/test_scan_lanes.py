@@ -1,12 +1,15 @@
-"""Craigslist read alongside the rest of a scan instead of ahead of it.
+"""Sources that answer only for themselves, read alongside the rest of a scan.
 
 A scan read every source strictly one after another, so the wait was the sum
 of all of them: 223 seconds on a real board, of which the sources themselves
-accounted for 221. Craigslist was 25 of the 29 seconds of this install's very
-first search. It is served from its own addresses and shares nothing with the
-portals behind CloudFront that already turn the app away, which makes it the
-one source that can be read at the same time as the others without any site
-seeing a different pattern of requests.
+accounted for 221. Craigslist alone was 25 of the 29 seconds of this install's
+very first search, and it is served from its own addresses.
+
+It is not the only one. Zillow Group answers for Zillow, Trulia and HotPads,
+and CoStar for Rent.com, ApartmentGuide and Apartments.com -- those two lines
+of traffic stay strictly in turn -- while the sites that answer for nobody but
+themselves are read on a lane beside them. Every site still sees one request
+at a time, at the pace it always saw.
 
 These pin what makes that safe as well as quicker. Only a source that declares
 it gets a lane, never one that merely shares Craigslist's name. The main line
@@ -192,19 +195,33 @@ def test_nothing_but_an_explicit_true_gives_a_source_a_lane(
     assert outcome.sources_failed == 2, "a source that did not opt in was given a lane"
 
 
-def test_craigslist_is_the_only_real_source_that_runs_in_its_own_lane() -> None:
-    """Chosen because it sits on its own servers and shares nothing with the
-    portals behind CloudFront. Any other source opting in has to be argued for
-    on its own, so a second one appearing is a failure rather than a surprise."""
-    from sf_housing.sources import CraigslistSource, default_sources
+def test_the_lane_holds_exactly_the_sources_somebody_argued_for() -> None:
+    """Which sources are read beside the rest is a ban-safety decision rather
+    than an optimisation: each is here because its owner sees nobody else's
+    requests, which tests/test_traffic_groups.py checks for real. Pinning the
+    roster by name means a source joining the lane is a decision somebody made,
+    not something that happened."""
+    from sf_housing.scanner import reads_on_its_own_lane
+    from sf_housing.sources import default_sources
 
-    assert CraigslistSource.runs_in_own_lane is True
-    opted = [
-        source.platform
-        for source in default_sources()
-        if getattr(source, "runs_in_own_lane", False) is True
-    ]
-    assert opted == ["Craigslist"]
+    expected = {
+        "Craigslist",               # its own servers, its own address space
+        "Listings Project",
+        "Abacus (small buildings)",  # appfolio.com, read in turn with AppFolio
+        "SpareRoom",
+        "SF Housing Portal",         # the city's own site
+        "Apartment List",
+        "Zumper",
+        "Uloop",
+        "UDR",
+        "AppFolio",
+        "AvalonBay",
+        "RentSFNow",
+        "Movoto",
+    }
+    laned = {source.platform for source in default_sources() if reads_on_its_own_lane(source)}
+
+    assert laned == expected
 
 
 def test_the_sequential_switch_puts_every_source_back_in_line(

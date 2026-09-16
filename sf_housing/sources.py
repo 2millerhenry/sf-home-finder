@@ -693,6 +693,9 @@ class ListingsProjectSource:
     to Listings Project's own individual listing page, so Oakland/Bay Area
     cards and generic collection links never leak into the monitor.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "Listings Project"
     mode = "automatic"
@@ -791,6 +794,9 @@ class AbacusSource:
     a card without an explicit unit count remains *unknown* so the dashboard's
     <=50-unit rule stays intact.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "Abacus (small buildings)"
     mode = "automatic"
@@ -941,6 +947,9 @@ class SFHousingPortalSource:
     building offering several unit types, so a building with a studio and a
     one-bedroom becomes two candidates the deal profile can judge separately.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "SF Housing Portal"
     mode = "automatic"
@@ -1099,6 +1108,9 @@ class ApartmentListSource:
     the one that decides whether the building is worth opening at all. The
     other unit types are named in the summary so nothing is hidden.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "Apartment List"
     mode = "automatic"
@@ -1284,6 +1296,9 @@ class ZumperSource:
     scanner's detail budget, and until that happens their rent stays unknown
     rather than being guessed at.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "Zumper"
     mode = "automatic"
@@ -1498,6 +1513,45 @@ _BROWSER_HEADERS = {
 # The nightly run that reads a rate-limited source to the bottom. Named here
 # rather than imported from the scanner because sources must not depend on it.
 DEEP_SWEEP_TRIGGER = "deep_sweep"
+
+
+# Whose rate limiter sees a source's requests. A site is not a hostname: one
+# company answers for several of them and counts every request against the same
+# address. Two sources in the same group are therefore never read at the same
+# moment. Zillow Group fronts Zillow, Trulia and HotPads; CoStar fronts
+# Rent.com, ApartmentGuide and Apartments.com -- and on the evening this was
+# written all of those refused inside a minute of each other (503 from Zillow,
+# 403 from Trulia, 429 from Rent.com and ApartmentGuide) while every
+# independent site answered normally, which is what one limiter looks like.
+_TRAFFIC_GROUPS = {
+    "zillow.com": "zillow-group",
+    "trulia.com": "zillow-group",
+    "hotpads.com": "zillow-group",
+    "rent.com": "costar",
+    "apartmentguide.com": "costar",
+    "apartments.com": "costar",
+}
+
+
+def traffic_group(source: object) -> str:
+    """Whose limiter answers for this source.
+
+    The registrable domain by default, which is right for every site that
+    answers only for itself and keeps two tenants of one host together --
+    appfolio.com serves two property managers here, facebook.com two sources.
+    The map above names the companies that front several domains. Two labels
+    is enough for every site read here; a .co.uk would need more.
+    """
+    declared = getattr(source, "traffic_group", None)
+    if declared:
+        return str(declared)
+    host = (urlsplit(str(getattr(source, "search_url", "") or "")).hostname or "").lower()
+    if not host:
+        # Nothing is fetched for it, so it shares a limiter with nobody.
+        return f"source:{getattr(source, 'platform', type(source).__name__)}"
+    labels = host.split(".")
+    domain = ".".join(labels[-2:]) if len(labels) > 1 else host
+    return _TRAFFIC_GROUPS.get(domain, domain)
 
 
 def _pages_for_trigger(source: object, trigger: str) -> int:
@@ -2799,6 +2853,9 @@ class MovotoSource:
     it is believed. Read without that, one search returning sale listings
     would put million-dollar "rents" into the pool.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "Movoto"
     mode = "automatic"
@@ -3368,6 +3425,9 @@ class UloopSource:
     is a breadcrumb -- so this is parsed out of the markup, which makes it the
     most fragile source here. It fails loudly on purpose.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "Uloop"
     mode = "automatic"
@@ -3588,6 +3648,9 @@ class RentSFNowSource:
     the search plugin's own endpoint, which returns JSON to an ordinary request
     with no nonce, no cookie and no browser.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "RentSFNow"
     mode = "automatic"
@@ -3781,6 +3844,9 @@ class AvalonBaySource:
     own, and the eight are already in this database through Redfin and
     Rent.com. The buildings are still read, for the link each unit needs.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "AvalonBay"
     mode = "automatic"
@@ -3954,6 +4020,9 @@ class AppFolioSource:
     tenant site always carries the listings container, whether or not it has
     anything in it, so that is what tells them apart.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "AppFolio"
     mode = "automatic"
@@ -4134,6 +4203,9 @@ class UDRSource:
     has to carry a dollar sign to count, and a size without one is not offered
     at all rather than offered at an unknown price -- UDR is saying it has none.
     """
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
 
     platform = "UDR"
     mode = "automatic"
@@ -5394,6 +5466,9 @@ class CraigslistSource:
 
 
 class SpareRoomSource:
+    # Answers only for itself, so it is read beside the rest rather than
+    # behind them. See traffic_group() for what "itself" means here.
+    runs_in_own_lane = True
     platform = "SpareRoom"
     mode = "automatic"
     search_url = "https://www.spareroom.com/rooms-for-rent/san_francisco?sort_by=last_updated"

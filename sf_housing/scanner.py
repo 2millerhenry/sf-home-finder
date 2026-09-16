@@ -187,6 +187,20 @@ INTERRUPTED_LANE_MESSAGE = (
 )
 
 
+def reads_on_its_own_lane(source: ListingSource) -> bool:
+    """Whether this source may be read beside the rest of a scan.
+
+    Only a source whose ``runs_in_own_lane`` is the value True -- not merely
+    something truthy -- and never one chosen by name: thirteen test files use a
+    stand-in called Craigslist, and choosing by name would thread every one of
+    them without anybody asking. What makes a source eligible is that its owner
+    sees nobody else's requests; sf_housing.sources.traffic_group says who that
+    owner is, and tests/test_traffic_groups.py refuses to let one owner be read
+    on both lines at once.
+    """
+    return getattr(source, "runs_in_own_lane", False) is True
+
+
 @dataclass
 class _SourceTally:
     """What one line of a scan collected, counted by that line alone."""
@@ -1445,11 +1459,7 @@ class Scanner:
         if scoped or os.environ.get(SEQUENTIAL_SCAN_VARIABLE) == "1":
             return []
         indexed = list(enumerate(active_sources, start=1))
-        chosen = [
-            (index, source)
-            for index, source in indexed
-            if getattr(source, "runs_in_own_lane", False) is True
-        ]
+        chosen = [(index, source) for index, source in indexed if reads_on_its_own_lane(source)]
         if not chosen or len(chosen) == len(indexed):
             return []
         return chosen
