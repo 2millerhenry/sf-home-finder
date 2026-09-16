@@ -12,6 +12,15 @@ The rest of this release is a fix to the Mac's terminal command, which
 Windows does not have: here the shortcuts in the folder you unpacked are the
 way in.
 
+Near matches means near. It used to hold everything that was not on the
+shortlist; it now holds homes that missed by one thing -- a few points short
+of your cut-off, or a little over your budget -- and each row says which, in
+money. Everything else collected is still in the full archive.
+
+The Say thanks panel is tidier: the right size for what it shows, readable in
+either theme, it says when it is loading, and it always offers a plain link to
+Ko-fi in a browser tab in case their page will not draw inside the panel.
+
 SF Home Finder 0.5.5 for Windows x64
 
 Near matches means near. It used to hold every home that was not on the

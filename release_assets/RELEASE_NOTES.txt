@@ -34,6 +34,26 @@ says so plainly either way -- including when some other homefinder earlier on
 your PATH would answer first. Repair does the same, for anybody who would
 rather double-click than type.
 
+Near matches means near, and says why. It used to hold everything that was not
+on the shortlist: on a real board 7,785 homes, of which 7,625 had been ruled
+out for the wrong number of bedrooms or twice the budget. It now holds homes
+that missed by one thing -- a few points short of your cut-off, or a little
+over your budget -- and every row leads with which, in money: "$120/mo over
+your budget" rather than a rule about maximums. That distinction could not be
+drawn before, because a home $120 over the line and one at four times the
+budget scored the same; how far past the line the rent fell is now written
+down when the home is judged. Everything else collected is still in the full
+archive, and your own board catches up the next time the app starts.
+
+The Say thanks panel looks like one thing now. Ko-fi's widget has no dark
+mode, so on a dark evening their white card sat on the app's dark sheet with a
+seam of their own tint around it; the panel is white whatever the app's theme,
+and it is the height their card actually needs rather than fifty pixels
+taller. It says it is loading while it loads, because it can take ten seconds
+and an empty white rectangle looks like a fault. And it always offers a plain
+link to Ko-fi in a browser tab: their page can refuse to draw inside a frame,
+and a panel with no way out is worse than no panel.
+
 SF Home Finder 0.5.5
 
 Three things, all of them from watching somebody install this on their own Mac
