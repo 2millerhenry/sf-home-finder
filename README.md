@@ -24,8 +24,9 @@ curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | 
 <sub>*19 MB download · about 2–3 minutes · roughly 155 MB on disk when it is done · no password,
 no admin*</sub>
 
-**Works on** a Mac with Apple Silicon — an M1 or newer — on macOS 15.6 or later. Not Intel
-Macs, and not Windows yet.
+**Works on** a Mac with Apple Silicon — an M1 or newer — on macOS 15.6 or later, and on
+Windows 10 or 11, 64-bit. Not Intel Macs. The command above is the Mac one; Windows is a
+download, [just below](#on-windows).
 
 Most of that time is one download: the app brings its own copy of Python rather than touching
 the one your Mac came with, so nothing else on your machine changes. If the window looks like
@@ -46,6 +47,29 @@ Control-click rather than double-click, because macOS blocks unsigned apps opene
 way. [Why that is safe to click through](#why-does-my-mac-warn-me). The command above does not
 show that warning, because macOS only marks what a *browser* downloaded — the file is identical
 either way.
+
+</details>
+
+<a id="on-windows"></a>
+<details>
+<summary><b>On Windows?</b> Download the ZIP.</summary>
+
+<br>
+
+1. **[Download the Windows ZIP](https://github.com/2millerhenry/sf-home-finder/releases/latest)**
+   — the file ending `Windows-x64.zip`.
+2. **Unzip it first.** Then open the folder and double-click
+   `2 Install SF Home Finder.cmd`.
+3. Wait a few minutes. Your browser opens on its own.
+
+Unzipping first matters: Windows will happily let you open files while they are still inside
+the ZIP, and the install cannot finish from in there.
+
+If Windows shows a SmartScreen warning, choose **More info**, then **Run anyway**. It appears
+because this release is unsigned, not because anything is wrong — the same reason macOS asks.
+
+No admin rights, no Python and no terminal. The first install downloads a private copy of
+Python that belongs only to this app, which is most of the few minutes.
 
 </details>
 
@@ -94,7 +118,7 @@ need to be in. Five minutes, and you never do it again. Press save and it goes l
 away — the first search usually brings back a few hundred homes.
 
 **Then leave it alone.** It looks again at ten in the morning and six in the evening, every
-day, as long as your Mac is awake and logged in. Nothing to remember, nothing to keep open.
+day, as long as your computer is awake and logged in. Nothing to remember, nothing to keep open.
 
 **Check in whenever it suits you.** Best matches at the top, with the reason each one scored
 that way. Star the ones worth a message, pass on the rest — what you have dealt with does not
@@ -137,7 +161,7 @@ the ask.
 ### Where does my information go?
 
 Nowhere. Your answers, the listings, your notes and any password you add are written to one
-folder on your Mac and never leave it. There is no account, and the app running on your laptop
+folder on your own computer and never leave it. There is no account, and the app running on your laptop
 reports nothing — no analytics, no usage, no crash reports. Uninstalling keeps your data unless
 you explicitly type `DELETE` when it asks.
 
