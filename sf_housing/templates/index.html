@@ -23,7 +23,7 @@
       <p class="subtle">The full archive, including low scores and dismissed homes.</p>
     {% elif view == 'near_matches' %}
       <h1>Near matches</h1>
-      <p class="subtle">Homes that came within reach of your cut-off without meeting it. Homes your deal ruled out are in the full archive.</p>
+      <p class="subtle">Homes that missed by one thing: a few points short of your cut-off, or a little over your budget. Each row says which. Everything else is in the full archive.</p>
     {% else %}
       <h1>{{ mode_labels[housing_mode][0] }} worth a look</h1>
       <p class="subtle">
@@ -280,6 +280,9 @@
             {% if listing.match_reasons %}<ul>{% for reason in listing.match_reasons[:3] %}<li>{{ reason }}</li>{% endfor %}</ul>{% else %}<span class="unknown">Not enough detail yet.</span>{% endif %}
           </td>
           <td class="cell-check">
+            {%- if view == 'near_matches' -%}
+            <p class="near-why">{% if listing.over_budget_by %}${{ "{:,}".format(listing.over_budget_by) }}/mo over your budget{% else %}{{ minimum_score - listing.score }} point{{ '' if minimum_score - listing.score == 1 else 's' }} below your cut-off{% endif %}</p>
+            {%- endif -%}
             {%- set open_items = listing.blockers or listing.checks -%}
             {%- if open_items -%}
             <ul class="check-list">{% for item in open_items %}<li title="{{ item.reason }}">{{ item.reason }}</li>{% endfor %}</ul>

@@ -48,6 +48,25 @@ def board(tmp_path: Path) -> Repository:
     return repository
 
 
+def add(repository: Repository, title: str, *, score: int, eligibility: str,
+        reasons: list[str], maximum: int | None = None, over_by: int | None = None) -> None:
+    """One more home on the board, judged the way the scorer would have judged it."""
+    import json
+
+    details = {"price": {"maximum": maximum, "over_by": over_by}} if maximum else {}
+    with repository.connection() as connection:
+        connection.execute(
+            "INSERT INTO listings (platform, source_id, title, original_url, canonical_url, price,"
+            " housing_kind, concern, score, eligibility, eligibility_reasons_json, score_details_json,"
+            " status, first_found, last_seen)"
+            " VALUES ('Craigslist', ?, ?, ?, ?, 2000, 'room', '', ?, ?, ?, ?, 'active',"
+            " datetime('now'), datetime('now'))",
+            (title, title, f"https://example.test/{title}", f"https://example.test/{title}",
+             score, eligibility, json.dumps(reasons), json.dumps(details)),
+        )
+        connection.commit()
+
+
 def near_matches(repository: Repository) -> set[str]:
     return {
         row["title"]
@@ -77,3 +96,76 @@ def test_a_home_nowhere_near_the_cut_off_is_not_a_near_match(tmp_path: Path) -> 
 
 def test_the_shortlist_is_not_repeated_in_near_matches(tmp_path: Path) -> None:
     assert "on the shortlist" not in near_matches(board(tmp_path))
+
+
+# --- Missing by a little, where the score cannot say so ---------------------
+
+
+def test_scoring_records_how_far_over_the_budget_a_home_is() -> None:
+    """A home over the budget is ruled out, and ruled-out homes are capped at
+    around 49 whatever else is right about them -- so on a real board a $5,430
+    home and a $12,400 home against a $3,000 deal both scored 49. The score
+    cannot tell "just over" from "four times over", and near matches is
+    exactly the question of which one this is. So the gap itself is written
+    down when the home is judged."""
+    from sf_housing.preferences import parse_preferences
+    from sf_housing.scoring import score_listing
+    from sf_housing.classification import classify_listing
+    from sf_housing.models import ListingCandidate
+
+    preferences = parse_preferences(
+        "profile_active: true\nminimum_score: 65\n"
+        "housing_paths: [one_bedroom]\none_bedroom:\n  max_monthly: 3000\n"
+    )
+    home = classify_listing(
+        ListingCandidate(
+            platform="Craigslist",
+            source_id="over",
+            title="One bedroom in the Mission",
+            original_url="https://example.test/over",
+            price=3120,
+            neighborhood="Mission District",
+            listing_type="Apartment",
+            summary="A one bedroom apartment available now.",
+        )
+    )
+
+    result = score_listing(home, preferences)
+    price = result.details.get("price") or {}
+
+    assert price.get("maximum"), "the ceiling it was judged against is not written down"
+    assert price["over_by"] == home.price - price["maximum"], (
+        "how far over the line it fell is not written down"
+    )
+
+
+def test_a_home_a_little_over_the_budget_is_a_near_match(tmp_path: Path) -> None:
+    """The case this exists for: everything about it fits except the rent, and
+    the rent misses by a tenth. Its score says 49, the same as a home at four
+    times the budget, so only the gap can tell them apart."""
+    repository = board(tmp_path)
+    add(repository, "a little over", score=49, eligibility="ineligible",
+        reasons=["The monthly price exceeds this path's maximum."], maximum=3000, over_by=120)
+
+    assert "a little over" in near_matches(repository)
+
+
+def test_a_home_far_over_the_budget_is_not_a_near_match(tmp_path: Path) -> None:
+    """A $12,400 home against a $3,000 deal missed by nothing that could be
+    called nearly."""
+    repository = board(tmp_path)
+    add(repository, "far over", score=49, eligibility="ineligible",
+        reasons=["The monthly price exceeds this path's maximum."], maximum=3000, over_by=9400)
+
+    assert "far over" not in near_matches(repository)
+
+
+def test_a_home_that_also_missed_something_else_is_not_a_near_match(tmp_path: Path) -> None:
+    """Nearly means one thing away. Over the budget *and* in a neighbourhood
+    the deal rules out is two."""
+    repository = board(tmp_path)
+    add(repository, "over and elsewhere", score=49, eligibility="ineligible",
+        reasons=["The monthly price exceeds this path's maximum.", "Bayview is outside your target neighborhoods."],
+        maximum=3000, over_by=120)
+
+    assert "over and elsewhere" not in near_matches(repository)

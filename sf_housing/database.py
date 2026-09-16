@@ -203,6 +203,11 @@ RENT_BANDS = 10
 # constraint outright -- the wrong number of bedrooms, twice the budget -- and
 # buried the 160 that had actually come close.
 NEAR_MATCH_MARGIN = 10
+# And how far over the rent line still counts as nearly. The score cannot say:
+# a home over the line is ruled out, and ruled-out homes all score about the
+# same -- so the gap the scorer wrote down is what separates a home over by a
+# hundred a month from one at four times the budget.
+NEAR_MATCH_OVER_BUDGET = 0.10
 
 
 class Repository:
@@ -681,12 +686,25 @@ class Repository:
             pass
         elif view == "near_matches":
             clauses.append("status IN ('active', 'saved')")
-            # Ruled out is not nearly right, however high the rest of the score.
-            clauses.append("eligibility IN ('eligible', 'needs_verification')")
-            clauses.append("score < ?")
-            parameters.append(minimum_score)
-            clauses.append("score >= ?")
-            parameters.append(max(0, minimum_score - NEAR_MATCH_MARGIN))
+            # Two ways to nearly match, and no others. A home the deal accepts
+            # that fell a few points short of the cut-off; or a home ruled out
+            # by one thing only, the rent, and only just -- which is the case
+            # the score is blind to.
+            clauses.append(
+                "("
+                "(eligibility IN ('eligible', 'needs_verification') AND score < ? AND score >= ?)"
+                " OR ("
+                "eligibility = 'ineligible'"
+                " AND json_array_length(COALESCE(eligibility_reasons_json, '[]')) = 1"
+                " AND COALESCE(json_extract(score_details_json, '$.price.over_by'), 0) > 0"
+                " AND json_extract(score_details_json, '$.price.over_by')"
+                " <= json_extract(score_details_json, '$.price.maximum') * ?"
+                ")"
+                ")"
+            )
+            parameters.extend(
+                [minimum_score, max(0, minimum_score - NEAR_MATCH_MARGIN), NEAR_MATCH_OVER_BUDGET]
+            )
         else:
             clauses.append("status IN ('active', 'saved')")
             clauses.append("eligibility IN ('eligible', 'needs_verification')")
@@ -979,6 +997,14 @@ class Repository:
         constraints = score_details.get("hard_constraints")
         item["checks"] = ordered_checks(constraints, "unknown")
         item["blockers"] = ordered_checks(constraints, "fail")
+        # How far past the rent line this one fell, in money. "The monthly
+        # price exceeds this path's maximum" is a rule being quoted at
+        # somebody; "$120/mo over your budget" is a number they can decide
+        # about, and it is the only thing separating a home worth a look from
+        # one at four times the budget, since both score the same.
+        price_detail = score_details.get("price") or {}
+        over_by = price_detail.get("over_by") or 0
+        item["over_budget_by"] = int(over_by) if item["eligibility"] == "ineligible" else 0
         # How long since anyone confirmed the source still lists this home. A
         # score says how well it fits; it says nothing about whether the home is
         # still there, and a home nobody has confirmed for a day is not one the

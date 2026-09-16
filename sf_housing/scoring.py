@@ -1236,6 +1236,15 @@ def _score_whole_unit(listing: ListingCandidate, preferences: Preferences) -> Sc
             "weight": weights["price"],
             "known": price_known,
             "missing": "Unknown: monthly price is not stated.",
+            # The line it was judged against, and how far past it the rent
+            # fell. A home over the line is ruled out, and ruled-out homes are
+            # scored much the same whatever else is right about them: on a real
+            # board a $5,430 home and a $12,400 one against a $3,000 deal both
+            # scored 49. So the score cannot say whether this missed by a tenth
+            # or by four times, and that is the entire question when deciding
+            # whether it nearly matched.
+            "maximum": max_monthly,
+            "over_by": max(0, int(listing.price) - max_monthly) if price_known else None,
             "main_results_eligible": price_matches,
         },
         "building_size": {

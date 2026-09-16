@@ -506,3 +506,16 @@ def test_a_source_that_publishes_full_text_is_not_asked_to_be_opened(
         for entry in result.details.get("hard_constraints", [])
         if entry.get("check") == "listing page"
     ]
+
+
+def test_a_near_match_row_says_how_it_missed(tmp_path: pathlib.Path) -> None:
+    """"The monthly price exceeds this path's maximum" is a rule quoted at
+    somebody. A home $120 a month over a $3,000 budget scores the same as one
+    at four times the budget, so the money is the only thing that tells them
+    apart -- and it is what somebody decides on."""
+    page, ids = render(
+        tmp_path, [("over", scored(price=3120), listing(price=3120))], view="near_matches"
+    )
+
+    row = row_for(page, ids["over"])
+    assert "$120/mo over your budget" in row

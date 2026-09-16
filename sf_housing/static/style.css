@@ -303,6 +303,7 @@ main { max-width: 1180px; margin: 0 auto; padding: 42px 28px 72px; }
 /* Ko-fi's widget took about ten seconds to arrive when this was measured, and
    an empty frame is a white rectangle: the same thing a broken panel looks
    like. This covers the frame until its load event says otherwise. */
+.near-why { margin: 0 0 4px; font-weight: 600; color: var(--ink); }
 .donate-loading { position: absolute; inset: 0; z-index: 1; margin: 0; display: grid; place-items: center; background: #fff; color: #6b7280; font-size: 0.92rem; }
 .donate-loading[hidden] { display: none; }
 .donate-fallback { margin: 0; padding: 0 16px 14px; text-align: center; font-size: 0.82rem; line-height: 1.4; color: #6b7280; background: #fff; }
