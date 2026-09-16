@@ -196,6 +196,15 @@ def _confirmation_check(stamp: object) -> dict[str, str] | None:
 RENT_BANDS = 10
 
 
+# How far below the cut-off a home can be and still be "nearly" a match. A near
+# match is one the deal would have taken if it had scored a little higher, not
+# every home the deal turned down: on a real board of 8,102 homes, "everything
+# not shortlisted" meant 7,785 near matches, of which 7,625 had failed a hard
+# constraint outright -- the wrong number of bedrooms, twice the budget -- and
+# buried the 160 that had actually come close.
+NEAR_MATCH_MARGIN = 10
+
+
 class Repository:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -672,8 +681,12 @@ class Repository:
             pass
         elif view == "near_matches":
             clauses.append("status IN ('active', 'saved')")
-            clauses.append("(eligibility = 'ineligible' OR score < ?)")
+            # Ruled out is not nearly right, however high the rest of the score.
+            clauses.append("eligibility IN ('eligible', 'needs_verification')")
+            clauses.append("score < ?")
             parameters.append(minimum_score)
+            clauses.append("score >= ?")
+            parameters.append(max(0, minimum_score - NEAR_MATCH_MARGIN))
         else:
             clauses.append("status IN ('active', 'saved')")
             clauses.append("eligibility IN ('eligible', 'needs_verification')")

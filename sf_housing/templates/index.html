@@ -23,7 +23,7 @@
       <p class="subtle">The full archive, including low scores and dismissed homes.</p>
     {% elif view == 'near_matches' %}
       <h1>Near matches</h1>
-      <p class="subtle">Homes that missed a hard limit or need more fit, kept separate so the shortlist stays honest.</p>
+      <p class="subtle">Homes that came within reach of your cut-off without meeting it. Homes your deal ruled out are in the full archive.</p>
     {% else %}
       <h1>{{ mode_labels[housing_mode][0] }} worth a look</h1>
       <p class="subtle">
@@ -351,7 +351,7 @@
       </ul>
       <p class="why-empty-actions">
         <a class="button" href="/preferences">Widen your deal</a>
-        <a href="/?housing={{ housing_mode }}&amp;view=near_matches&amp;sort=score">See them in Near matches</a>
+        <a href="/?housing={{ housing_mode }}&amp;view=all&amp;sort=score">See them in the full archive</a>
       </p>
     </div>
     {% endif %}
@@ -367,7 +367,7 @@
       <li><b>{{ item.count }}</b> {{ item.reason }}</li>
       {% endfor %}
     </ul>
-    <p><a href="/preferences">Widen your deal</a> or <a href="/?housing={{ housing_mode }}&amp;view=near_matches&amp;sort=score">see them in Near matches</a>.</p>
+    <p><a href="/preferences">Widen your deal</a> or <a href="/?housing={{ housing_mode }}&amp;view=all&amp;sort=score">see them in the full archive</a>.</p>
   </details>
   {% endif %}
 </section>

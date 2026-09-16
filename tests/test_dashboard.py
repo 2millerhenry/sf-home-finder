@@ -845,7 +845,11 @@ def test_an_empty_shortlist_names_what_held_the_homes_back(tmp_path: Path) -> No
     known = set(CHECK_EXCLUSION_PHRASES.values()) | {"below your 85 match cut-off"}
     assert any(phrase in page for phrase in known), "the reason has to be one it can name"
     assert 'href="/preferences"' in page, "and offers the way out"
-    assert "view=near_matches" in page, "and the homes themselves are still reachable"
+    # The archive rather than near matches: these homes were held back by a
+    # hard limit, and a near match now means one that came close to the
+    # cut-off. Sending somebody to a view that excludes them is worse than
+    # not linking at all.
+    assert "view=all" in page, "and the homes themselves are still reachable"
 
 
 def test_the_reasons_are_counted_not_guessed(tmp_path: Path) -> None:

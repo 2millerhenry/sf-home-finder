@@ -187,8 +187,11 @@ def test_an_excluded_listing_says_why_it_was_excluded_not_what_is_unknown() -> N
 
 
 def test_the_row_of_an_excluded_listing_shows_the_exclusion(tmp_path: pathlib.Path) -> None:
+    # In the archive rather than near matches: a home over the budget was ruled
+    # out, and a near match now means one that came close to the cut-off rather
+    # than anything that failed the deal.
     page, ids = render(
-        tmp_path, [("over", scored(price=9000), listing(price=9000))], view="near_matches"
+        tmp_path, [("over", scored(price=9000), listing(price=9000))], view="all"
     )
     row = row_for(page, ids["over"])
 
