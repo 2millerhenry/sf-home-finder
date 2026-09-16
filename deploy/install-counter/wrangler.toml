@@ -1,0 +1,13 @@
+# The install counter. Deploy notes are in README.md beside this file.
+name = "sf-home-finder-install"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# Created by the deploy steps; the id is filled in there. Holds one key per
+# address per day (hashed, expiring) and one counter per day.
+[[kv_namespaces]]
+binding = "COUNTER"
+id = "2ebadfdf07374b13a01d5d1082eba2f8"
+
+[observability]
+enabled = true

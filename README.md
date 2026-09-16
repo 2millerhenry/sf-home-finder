@@ -18,7 +18,7 @@ Open **Terminal** — press `Cmd` + `Space`, type `Terminal`, press Return — t
 press Return:
 
 ```
-curl -fsSL https://github.com/2millerhenry/sf-home-finder/raw/HEAD/install.sh | bash
+curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
 ```
 
 <sub>*19 MB download · about 2–3 minutes · roughly 155 MB on disk when it is done · no password,
@@ -78,12 +78,13 @@ three-bed to split with friends — each with its own budget, its own areas, its
 Change your mind next month and everything it has ever collected is scored again against the
 new answer.
 
-**Free, private, and quiet.** No account, no server, no subscription, ever. It collects nothing
-about you — no analytics, no logs sent anywhere, no email address, not even a sign-up — and
-your search never leaves your laptop. Once a day it asks GitHub whether a newer version exists,
-sending nothing about you, and one setting turns even that off. It never acts in your name either: no automated emails to
-landlords, no forms filled in, no applications. It reads what is already public and hands it to
-you.
+**Free, private, and quiet.** No account, no subscription, ever. The app itself collects
+nothing about you — no analytics, no usage, no email address, not even a sign-up — and your
+search never leaves your laptop. Installing it is counted, one tally per address per day so I
+know roughly how many people use this, and the address itself is never stored; once a day it
+asks GitHub whether a newer version exists, sending nothing about you, and one setting turns
+that off. It never acts in your name either: no automated emails to landlords, no forms filled
+in, no applications. It reads what is already public and hands it to you.
 
 ## Once it is running
 
@@ -136,13 +137,25 @@ the ask.
 ### Where does my information go?
 
 Nowhere. Your answers, the listings, your notes and any password you add are written to one
-folder on your Mac and never leave it. There is no account and no analytics. Uninstalling keeps
-your data unless you explicitly type `DELETE` when it asks.
+folder on your Mac and never leave it. There is no account, and the app running on your laptop
+reports nothing — no analytics, no usage, no crash reports. Uninstalling keeps your data unless
+you explicitly type `DELETE` when it asks.
 
-It does make one request of its own: once a day it asks GitHub whether a newer version has been
+Two things do cross the network, and neither is the app watching you use it.
+
+**Installing is counted.** The install command above fetches its script from a small server I
+run, which tallies one install per address per day — otherwise I have no idea whether anyone
+is using this. Your address is combined with a secret and the day's date and hashed; the
+address itself is never written down, and the same laptop produces an unrelated value
+tomorrow. It is a count and nothing else: not sold, not shared, not joined to anything.
+[The whole thing is about a hundred lines and you can read it](deploy/install-counter/worker.js).
+Downloading the ZIP from the releases page skips it entirely, and so does
+`curl -fsSL https://github.com/2millerhenry/sf-home-finder/raw/HEAD/install.sh | bash`.
+
+**Once a day it checks for a new version.** It asks GitHub whether a newer one has been
 released, so that a fix can reach you at all. It sends nothing — no query, no identifier, not
-even which version you are running — and it is the same public page anyone can open in a browser.
-Set `SF_HOUSING_NO_UPDATE_CHECK=1` and it never asks.
+even which version you are running — and it is the same public page anyone can open in a
+browser. Set `SF_HOUSING_NO_UPDATE_CHECK=1` and it never asks.
 
 ### Why does my Mac warn me?
 

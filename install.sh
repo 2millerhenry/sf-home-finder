@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install SF Home Finder:
 #
-#   curl -fsSL https://github.com/2millerhenry/sf-home-finder/raw/HEAD/install.sh | bash
+#   curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
 #
 # Downloads the current release and runs the installer inside it -- the same one
 # the ZIP contains, which checks every file against a checksum before using it.
