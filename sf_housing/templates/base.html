@@ -80,8 +80,17 @@
        stay overflow:visible for the close button cannot also clip the frame, so
        giving both a radius left a hairline of dialog showing at every corner. #}
     <div class="donate-surface">
+      {# Over the frame, not behind it: an empty frame paints opaque white, so
+         anything behind it is invisible exactly when it is needed. #}
+      <p class="donate-loading" data-donate-loading hidden>Loading Ko-fi&hellip;</p>
       <iframe title="Ko-fi donation panel" data-donate-frame src="about:blank"
               loading="lazy" referrerpolicy="no-referrer"></iframe>
+      {# Ko-fi can decline to render inside a frame -- a captcha check that
+         fails there leaves the panel showing an error and nothing else. The
+         plain link is always here, so the panel is never a dead end. #}
+      <p class="donate-fallback">
+        Not loading? <a href="{{ donate_url }}" target="_blank" rel="noopener noreferrer external">Open Ko-fi in a browser tab</a>
+      </p>
     </div>
     <button type="button" class="donate-close" data-donate-close aria-label="Close">&times;</button>
   </dialog>

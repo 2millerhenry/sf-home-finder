@@ -63,8 +63,13 @@ def test_a_configured_donation_url_appears_once_in_the_footer_of_every_page(
         for path in ("/preferences", "/alerts"):
             page = client.get(path)
             assert page.status_code == 200, path
-            assert page.text.count(f'href="{DONATE_URL}"') == 1, path
+            footer = page.text[page.text.index("site-footer"):page.text.index("</footer>")]
+            assert footer.count(f'href="{DONATE_URL}"') == 1, path
             assert "Say thanks" in page.text, path
+            # One more lives inside the panel, as the way out when Ko-fi's
+            # frame will not render. Two on the page, one of them in the
+            # footer: a third would be a link nobody decided to add.
+            assert page.text.count(f'href="{DONATE_URL}"') == 2, path
 
 
 def test_the_donation_link_cannot_reach_back_into_the_dashboard(
@@ -257,3 +262,87 @@ def test_the_footer_is_meant_to_be_noticed() -> None:
 
     assert "var(--band-strong)" in footer, footer
     assert size >= 0.9, f"the footer type is still small print at {size}rem"
+
+
+def test_the_panel_shows_kofi_on_white_in_both_themes() -> None:
+    """Ko-fi's widget has no dark mode: loaded with prefers-color-scheme dark
+    it still renders a white card on a pale tint, measured in a browser at the
+    panel's own size. Painting our surface with the app's colour therefore put
+    a light card on a dark sheet at night, with the tint showing as a seam
+    around it. The panel presents their card on white whatever the app's theme,
+    which is the one combination that looks deliberate."""
+    import pathlib
+    import re
+
+    css = pathlib.Path("sf_housing/static/style.css").read_text(encoding="utf-8")
+    surface = re.search(r"^\.donate-surface \{([^}]*)\}", css, re.M).group(1)
+    frame = re.search(r"^\.donate-dialog iframe \{([^}]*)\}", css, re.M).group(1)
+
+    assert "var(--surface)" not in surface, "the panel follows the app's theme into the dark"
+    assert "var(--surface)" not in frame, "the frame follows the app's theme into the dark"
+    assert "#fff" in surface.lower(), surface
+    assert "#fff" in frame.lower(), frame
+
+
+def test_the_frame_is_the_height_the_widget_actually_needs() -> None:
+    """Measured rather than guessed: at the panel's 464px width Ko-fi's card
+    ends, including "Powered by Ko-fi", a little under 620px. The old 664 left
+    a band of empty tint under it that read as a rendering fault."""
+    import pathlib
+    import re
+
+    css = pathlib.Path("sf_housing/static/style.css").read_text(encoding="utf-8")
+    frame = re.search(r"^\.donate-dialog iframe \{([^}]*)\}", css, re.M).group(1)
+    height = int(re.search(r"height: (\d+)px", frame).group(1))
+
+    assert 600 <= height <= 630, f"{height}px is not the height the widget renders at"
+
+
+def test_there_is_a_way_out_when_the_widget_will_not_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ko-fi is somebody else's page in an iframe, and it can refuse to render
+    inside one: driving it in a browser it answered "Captcha security check
+    failed. Please try refreshing or using a different browser." A panel whose
+    only content is that message is a dead end, so the dialog itself always
+    offers the plain link."""
+    monkeypatch.setattr("sf_housing.app.DONATE_URL", DONATE_URL)
+    application = create_app(settings=app_settings(tmp_path), sources=[], enable_scheduler=False)
+
+    with TestClient(application) as client:
+        page = client.get("/").text
+
+    dialog = page[page.index("donate-dialog"):page.index("donate-panel.js")]
+    assert DONATE_URL in dialog, "the panel offers no way to reach Ko-fi if the frame fails"
+    assert 'target="_blank"' in dialog
+
+
+def test_the_panel_says_it_is_loading_rather_than_showing_a_blank_card(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ko-fi's widget took about ten seconds to appear when this was measured
+    in a browser, and until it did the panel was an empty white rectangle --
+    which is what a broken panel looks like too. It says what it is doing, and
+    the frame covers the line when it arrives.
+
+    Hidden on the frame's load event rather than a timer: the frame starts at
+    about:blank, which fires load immediately, so the line is only armed once a
+    real source has been set."""
+    monkeypatch.setattr("sf_housing.app.DONATE_URL", DONATE_URL)
+    application = create_app(settings=app_settings(tmp_path), sources=[], enable_scheduler=False)
+
+    with TestClient(application) as client:
+        page = client.get("/").text
+        script = client.get("/static/donate-panel.js").text
+
+    assert "data-donate-loading" in page, "nothing tells anybody the frame is on its way"
+    assert "data-donate-loading" in script and '"load"' in script, (
+        "the line is never taken down when the frame arrives"
+    )
+    # The frame is lazy: its empty about:blank settles a moment after the panel
+    # opens, and that load event is not Ko-fi arriving. Taking the line down on
+    # it put the blank rectangle straight back.
+    uncover = script[script.index("const uncover"):]
+    assert "about:blank" in uncover, (
+        "the empty frame settling would be mistaken for Ko-fi arriving"
+    )
