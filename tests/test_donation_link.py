@@ -346,3 +346,26 @@ def test_the_panel_says_it_is_loading_rather_than_showing_a_blank_card(
     assert "about:blank" in uncover, (
         "the empty frame settling would be mistaken for Ko-fi arriving"
     )
+
+
+def test_the_heart_breathes_slowly_and_only_when_motion_is_welcome() -> None:
+    """It sits in small print at the foot of every page, so it has to be the
+    quietest thing there: slow enough to read as breathing rather than
+    beating, slight enough not to pull the eye off the page, and absent for
+    anybody who has asked their system for less motion."""
+    import pathlib
+    import re
+
+    css = pathlib.Path("sf_housing/static/style.css").read_text(encoding="utf-8")
+    guarded = [
+        block
+        for block in re.findall(r"@media \(prefers-reduced-motion: no-preference\) \{(.*?)\n\}", css, re.S)
+        if "donate-heart" in block
+    ]
+    assert guarded, "the heart moves even for somebody who asked it not to"
+
+    block = guarded[0]
+    seconds = float(re.search(r"donate-heart-breath (\d+(?:\.\d+)?)s", block).group(1))
+    biggest = max(float(value) for value in re.findall(r"scale\((\d+(?:\.\d+)?)\)", block))
+    assert seconds >= 3, f"{seconds}s is a pulse, not a breath"
+    assert 1 < biggest <= 1.2, f"scale({biggest}) is too much for footer small print"

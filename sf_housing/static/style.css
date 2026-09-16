@@ -398,6 +398,17 @@ main { max-width: 1180px; margin: 0 auto; padding: 42px 28px 72px; }
 /* 13px against a 14px label -- a little over its cap height, because a solid
    shape reads smaller than letterforms measured the same. */
 .donate-heart { width: 13px; height: 13px; flex: none; fill: currentColor; }
+/* A slow breath rather than a beat. Four seconds end to end and a twelfth
+   larger at the top of it: the button is small print in a footer, and anything
+   quicker or wider reads as a badge asking to be dealt with. Nothing at all
+   for somebody who has asked their system for less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .donate-heart { transform-origin: center; animation: donate-heart-breath 4s ease-in-out infinite; }
+  @keyframes donate-heart-breath {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.12); }
+  }
+}
 
 @media (max-width: 760px) {
   .footer-inner { padding-inline: 16px; }
