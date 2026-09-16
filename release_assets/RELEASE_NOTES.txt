@@ -1,3 +1,39 @@
+SF Home Finder 0.5.6
+
+Checks finish about forty seconds sooner again -- measured across this
+board's last thirty-seven checks, where the saving ran from half a minute to
+just over a minute depending on how much each site had to say.
+
+Version 0.5.4 began reading Craigslist alongside the rest of a check instead
+of ahead of it, because Craigslist answers for itself: no other site sees its
+requests. That is true of most of the sites here. Zillow, Trulia and HotPads
+are one company and count our requests together; Rent.com, ApartmentGuide and
+Apartments.com are another. The rest -- the city's own portal, Zumper, Uloop,
+AvalonBay, SpareRoom, Movoto, Apartment List, UDR and the building managers --
+each answer only for themselves.
+
+So a check now reads those two companies strictly in turn on one line, and
+everything that answers for itself on a second line beside it. No site is ever
+asked for two things at once, and none is read faster than before: every one
+still gets one page at a time, at the same pace, in the same order as its
+neighbours on its own line. Each source declares whose limiter it answers to,
+and a test refuses to let one company's sites be split across the two lines.
+
+If this ever turns out to cost something, SF_HOUSING_SEQUENTIAL_SCAN=1 still
+puts every source back in one line exactly as it was.
+
+The homefinder command is also findable now, wherever you type it. It lives in
+~/.local/bin, which a stock Mac shell does not search, and 0.5.5 added the
+missing line to one file -- the one your shell reads when it opens a window.
+That left it missing from the others: a zsh script reads a different file, so
+does a login bash, and fish reads none of them and does not understand their
+syntax. The line now goes into each file your own shell reads, once, written
+in the syntax that shell speaks. Then the installer starts a fresh shell and
+asks it whether the command is there, instead of telling you it will be, and
+says so plainly either way -- including when some other homefinder earlier on
+your PATH would answer first. Repair does the same, for anybody who would
+rather double-click than type.
+
 SF Home Finder 0.5.5
 
 Three things, all of them from watching somebody install this on their own Mac

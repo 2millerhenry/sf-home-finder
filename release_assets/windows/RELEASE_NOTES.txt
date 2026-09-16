@@ -1,3 +1,17 @@
+SF Home Finder 0.5.6 for Windows x64
+
+Checks finish about forty seconds sooner. Sites that answer only for themselves -- the city's own
+portal, Zumper, Uloop, AvalonBay, SpareRoom, Movoto and the building managers
+-- are now read on a second line beside the two companies that count their
+requests together (Zillow, Trulia and HotPads; Rent.com, ApartmentGuide and
+Apartments.com), which stay strictly in turn. No site is asked for two things
+at once or read any faster than before. SF_HOUSING_SEQUENTIAL_SCAN=1 puts
+everything back in one line.
+
+The rest of this release is a fix to the Mac's terminal command, which
+Windows does not have: here the shortcuts in the folder you unpacked are the
+way in.
+
 SF Home Finder 0.5.5 for Windows x64
 
 Near matches means near. It used to hold every home that was not on the
