@@ -10,10 +10,7 @@ things.
 I built this for my own search. Figured other people might get some use out of it, so here it
 is. It is free, it runs on your own laptop, and it takes about three minutes to start.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/shortlist-dark.png">
-  <img alt="The shortlist: studios ranked by how well they match, each row showing the score, rent, neighborhood, source and what still needs confirming" src="docs/screenshots/shortlist.png">
-</picture>
+<img alt="Dragging the match slider from 50 up to 88: the count falls from every possible home to the three excellent ones, and the shortlist behind it re-ranks as it goes, each row showing its score, rent, neighborhood and source" src="docs/screenshots/launch.gif">
 
 ## Install it
 
@@ -103,6 +100,13 @@ that way. Star the ones worth a message, pass on the rest — what you have deal
 come back.
 
 ## A closer look
+
+**Every home it found, ranked, with whatever is still unknown said out loud.**
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/shortlist-dark.png">
+  <img alt="The shortlist: studios ranked by how well they match, each row showing the score, rent, neighborhood, source and what still needs confirming" src="docs/screenshots/shortlist.png">
+</picture>
 
 **Eighteen sites, no accounts, nothing to set up.**
 
