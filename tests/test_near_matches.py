@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from sf_housing.database import NEAR_MATCH_MARGIN, Repository
+from sf_housing.preferences import Preferences
 
 
 CUT_OFF = 65
@@ -169,3 +170,50 @@ def test_a_home_that_also_missed_something_else_is_not_a_near_match(tmp_path: Pa
         maximum=3000, over_by=120)
 
     assert "over and elsewhere" not in near_matches(repository)
+
+
+def test_scoring_records_the_gap_for_a_room_too(preferences: Preferences) -> None:
+    """Rooms are judged by a different path, where being over the rent line is
+    not a rule that rules a home out but a cap that holds the score at 54. So
+    a room fifty dollars over and one at twice the budget both score 54, and
+    the cap sits below any band drawn around the cut-off -- the room case of
+    exactly the problem the whole-home path had."""
+    from sf_housing.classification import classify_listing
+    from sf_housing.models import ListingCandidate
+    from sf_housing.scoring import score_listing
+
+    ceiling = int(preferences.section("budget").get("max_monthly"))
+    room = classify_listing(
+        ListingCandidate(
+            platform="Craigslist",
+            source_id="room-over",
+            title="Private room in a shared flat near Golden Gate Park",
+            original_url="https://example.test/room-over",
+            price=ceiling + 100,
+            neighborhood="NOPA",
+            summary="A private room in a shared flat, available now. Six month lease.",
+        )
+    )
+
+    price = (score_listing(room, preferences).details or {}).get("price") or {}
+
+    assert price.get("maximum") == ceiling, "the room path never says what it judged the rent against"
+    assert price.get("over_by") == 100, "the room path never says how far over the rent fell"
+
+
+def test_a_room_a_little_over_the_budget_is_a_near_match(tmp_path: Path) -> None:
+    """It is not ruled out -- it is capped at 54 -- so a band around the
+    cut-off cannot reach it, and it used to disappear from every list."""
+    repository = board(tmp_path)
+    add(repository, "room a little over", score=54, eligibility="eligible",
+        reasons=[], maximum=2000, over_by=100)
+
+    assert "room a little over" in near_matches(repository)
+
+
+def test_a_room_far_over_the_budget_is_not_a_near_match(tmp_path: Path) -> None:
+    repository = board(tmp_path)
+    add(repository, "room far over", score=54, eligibility="eligible",
+        reasons=[], maximum=2000, over_by=1800)
+
+    assert "room far over" not in near_matches(repository)

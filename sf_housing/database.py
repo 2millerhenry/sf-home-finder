@@ -694,11 +694,16 @@ class Repository:
                 "("
                 "(eligibility IN ('eligible', 'needs_verification') AND score < ? AND score >= ?)"
                 " OR ("
-                "eligibility = 'ineligible'"
-                " AND json_array_length(COALESCE(eligibility_reasons_json, '[]')) = 1"
-                " AND COALESCE(json_extract(score_details_json, '$.price.over_by'), 0) > 0"
+                # Over the rent line by a little, however the deal says so. For
+                # a whole home that is a hard rule and the home is ruled out --
+                # so it must have missed nothing else. For a room it is a cap
+                # on the score instead, which leaves it eligible but sitting
+                # below any band drawn around the cut-off.
+                "COALESCE(json_extract(score_details_json, '$.price.over_by'), 0) > 0"
                 " AND json_extract(score_details_json, '$.price.over_by')"
                 " <= json_extract(score_details_json, '$.price.maximum') * ?"
+                " AND (eligibility != 'ineligible'"
+                "      OR json_array_length(COALESCE(eligibility_reasons_json, '[]')) = 1)"
                 ")"
                 ")"
             )
@@ -1004,7 +1009,7 @@ class Repository:
         # one at four times the budget, since both score the same.
         price_detail = score_details.get("price") or {}
         over_by = price_detail.get("over_by") or 0
-        item["over_budget_by"] = int(over_by) if item["eligibility"] == "ineligible" else 0
+        item["over_budget_by"] = int(over_by)
         # How long since anyone confirmed the source still lists this home. A
         # score says how well it fits; it says nothing about whether the home is
         # still there, and a home nobody has confirmed for a day is not one the

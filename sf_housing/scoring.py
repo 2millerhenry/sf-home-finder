@@ -1470,6 +1470,17 @@ def score_listing(listing: ListingCandidate, preferences: Preferences) -> ScoreR
     for item in active:
         if item.match_label:
             details[item.name]["match_label"] = item.match_label
+    # The same two numbers the whole-home path writes down: the line the rent
+    # was judged against, and how far past it this one fell. A room over the
+    # line is not ruled out -- it is capped at 54 -- so without the gap a room
+    # fifty dollars over and one at twice the budget are both simply "54", and
+    # near matches cannot tell them apart any better than the score can.
+    room_ceiling = preferences.section("budget").get("max_monthly")
+    if "price" in details and room_ceiling:
+        details["price"]["maximum"] = int(room_ceiling)
+        details["price"]["over_by"] = (
+            max(0, int(listing.price) - int(room_ceiling)) if listing.price is not None else None
+        )
     available_on = _available_on(listing)
     if available_on and "availability" in details:
         details["availability"]["available_on"] = available_on.isoformat()
