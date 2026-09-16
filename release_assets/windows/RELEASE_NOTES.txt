@@ -1,3 +1,14 @@
+SF Home Finder 0.5.5 for Windows x64
+
+Near matches means near. It used to hold every home that was not on the
+shortlist, which on a real board meant 7,785 homes -- 7,625 of which the deal
+had ruled out outright, for the wrong number of bedrooms or twice the budget.
+It now holds only the homes that came within ten points of your cut-off.
+Nothing is hidden; everything collected is still in the full archive.
+
+Installing downloads about six megabytes less and installs ten fewer packages:
+the app was asking for a bundle of extras it never used.
+
 SF Home Finder 0.5.4 for Windows x64
 
 Checking for new homes takes less time, the very first check included.

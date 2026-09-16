@@ -44,6 +44,22 @@ def test_a_command_that_will_not_be_found_is_dealt_with() -> None:
     assert '[ "${CLI_READY:-0}" = 1 ] && [ "${CLI_ON_PATH:-0}" = 1 ]' in INSTALLER
 
 
+def test_the_command_can_be_used_in_the_window_that_installed_it() -> None:
+    """A PATH line in a profile is read by the *next* shell, not this one, so
+    "open a new Terminal window and it will work" is a step somebody has to
+    remember minutes later. The first person to install this on their own Mac
+    typed homefinder in the window they had just installed from, was told
+    command not found, and stopped there. So the installer offers something
+    that works in the window they are already looking at."""
+    assert "Open a new Terminal window and it will work." not in INSTALLER, (
+        "the only advice is still to open another window"
+    )
+    assert '"  In this window:     source $PROFILE"' in INSTALLER, (
+        "no way to use the command in the window it was installed from"
+    )
+    assert '"$CLI_DIR/homefinder"' in INSTALLER, "the full path is never offered"
+
+
 def test_uninstalling_takes_the_command_with_it() -> None:
     """It lives outside the app folder, so removing the folder alone would leave
     a command behind pointing at nothing."""
@@ -159,8 +175,11 @@ def test_the_path_is_fixed_rather_than_described() -> None:
     assert ">> \"$PROFILE\"" in INSTALLER, "the line is only printed, never written"
     # ...and never twice, on a re-run or an upgrade.
     assert "grep -qF '.local/bin'" in INSTALLER
-    # ...and they are told the current shell will not see it.
-    assert "Open a new Terminal window" in INSTALLER
+    # ...and they are told the shell they are looking at will not see it. The
+    # wording moved from "open a new Terminal window" to naming this window and
+    # offering a way to use the command in it; what must not go is being told.
+    assert "which this Terminal window" in INSTALLER
+    assert "does not know about yet" in INSTALLER
 
 
 def test_fish_is_told_rather_than_edited() -> None:
@@ -177,7 +196,7 @@ import subprocess as sp
 import tempfile
 
 
-def run(args, root, port="9911", env=None):
+def run(args, root, port="9911", env=None, script=None):
     """Run the real command against a given app root."""
     # Belt as well as braces: the session fixture sets this too, but this is
     # the harness that can reach the installer, and an installer that writes
@@ -189,7 +208,9 @@ def run(args, root, port="9911", env=None):
         SF_HOUSING_NO_LAUNCH_AGENT="1",
     )
     environ.update(env or {})
-    return sp.run(["/bin/bash", str(CLI), *args], capture_output=True, text=True, env=environ)
+    return sp.run(
+        ["/bin/bash", str(script or CLI), *args], capture_output=True, text=True, env=environ
+    )
 
 
 @pytest.fixture
@@ -278,6 +299,7 @@ import json
 import socket
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
@@ -461,3 +483,287 @@ def test_updating_confirms_the_new_version_is_the_one_answering() -> None:
     assert 'if [ -z "$after" ]' in branch, "not answering is not distinguished"
     assert '[ "$after" = "$before" ]' in branch, "an unchanged version is reported as new"
     assert "Now running" in branch
+
+
+# --- Restarting the copy you are in, not the one somebody else is using ------
+
+
+class fake_launchctl:
+    """A stand-in for /bin/launchctl, and the copy of the command that reaches it.
+
+    The command names /bin/launchctl by absolute path, which is right: PATH
+    belongs to whoever is typing, and a login service is not the place to take
+    what it offers. It also leaves a test nothing to intercept, because /bin is
+    read-only on macOS. So what runs here is the command with that one absolute
+    path relaxed to a bare name. The substitution is asserted, so a command that
+    stopped calling launchctl that way is not quietly recorded as a pass.
+    """
+
+    def __init__(self, tmp_path):
+        binaries = tmp_path / "fake-bin"
+        binaries.mkdir()
+        self.log = tmp_path / "launchctl-calls"
+        stub = binaries / "launchctl"
+        stub.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$LAUNCHCTL_LOG"\n')
+        stub.chmod(0o755)
+
+        source = CLI.read_text()
+        assert "/bin/launchctl " in source, "the command no longer calls launchctl by that path"
+        self.script = tmp_path / "homefinder"
+        self.script.write_text(source.replace("/bin/launchctl ", "launchctl "))
+        self.env = {
+            "PATH": f"{binaries}:{os.environ['PATH']}",
+            "LAUNCHCTL_LOG": str(self.log),
+        }
+
+    @property
+    def calls(self):
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+
+@pytest.fixture
+def launchctl(tmp_path):
+    return fake_launchctl(tmp_path)
+
+
+@pytest.fixture
+def account_with_an_install(tmp_path):
+    """A home directory that already has the real account's login service in it.
+
+    Every test below runs against this rather than the author's own home, so
+    nothing here can reach the plist the machine running the suite depends on --
+    and the copy of the command under test cannot call /bin/launchctl at all.
+    """
+    home = tmp_path / "home"
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    (home / "Library" / "LaunchAgents" / "com.sfhousing.monitor.plist").write_text("")
+    return home
+
+
+# The three ways an install says it is not the account's own, written the way
+# the environment writes them. "APP_AGENTS" and "HOME_AGENTS" stand in for
+# directories only the test knows the path of.
+@pytest.mark.parametrize(
+    "isolation",
+    [
+        pytest.param({"SF_HOUSING_NO_LAUNCH_AGENT": "1"}, id="told-not-to"),
+        pytest.param(
+            {"SF_HOUSING_NO_LAUNCH_AGENT": "0", "SF_HOUSING_LAUNCH_AGENTS_DIR": "APP_AGENTS"},
+            id="plist-kept-elsewhere",
+        ),
+        pytest.param(
+            {"SF_HOUSING_NO_LAUNCH_AGENT": "1", "SF_HOUSING_LAUNCH_AGENTS_DIR": "HOME_AGENTS"},
+            id="told-not-to-despite-the-directory",
+        ),
+    ],
+)
+def test_restarting_an_isolated_copy_leaves_the_shared_login_service_alone(
+    isolation, stub, launchctl, account_with_an_install
+) -> None:
+    """launchd knows one com.sfhousing.monitor per account, and an isolated copy
+    never registers it -- install.sh skips that step precisely so a throwaway
+    install cannot reach the real account's. Kickstarting the label from here
+    therefore restarts whichever installation did register it.
+
+    Hit for real on 2026-09-15: running the isolated copy's own restart, on
+    8011, bounced the live app on 8000 while it was serving. The plist is
+    present here for the same reason it was present that day -- an isolated
+    install writes one, it is only never loaded.
+
+    The last case is the flag contradicting the directory. The flag wins, which
+    is the rule uninstall.sh already follows before it goes near launchctl: it
+    is the one signal that says outright that this copy's service was never
+    loaded into the login session.
+    """
+    agents = {
+        "APP_AGENTS": stub / "LaunchAgents",
+        "HOME_AGENTS": account_with_an_install / "Library" / "LaunchAgents",
+    }
+    env = dict(launchctl.env, HOME=str(account_with_an_install), **isolation)
+    configured = env.get("SF_HOUSING_LAUNCH_AGENTS_DIR")
+    if configured:
+        env["SF_HOUSING_LAUNCH_AGENTS_DIR"] = str(agents[configured])
+    # Whatever directory this copy's plist belongs in, it is written there: the
+    # bug is not a missing file, it is the wrong service being kicked.
+    plist = agents.get(configured, stub / "LaunchAgents") / "com.sfhousing.monitor.plist"
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    plist.write_text("")
+
+    result = run(["restart"], stub, script=launchctl.script, env=env)
+
+    assert launchctl.calls == [], f"it reached the shared login service: {launchctl.calls}"
+    assert result.returncode == 0, result.stderr
+    assert "opened --no-browser" in result.stdout, "it stopped the copy without starting it again"
+
+
+def test_restarting_an_isolated_copy_stops_the_process_that_was_serving(
+    stub, launchctl, account_with_an_install
+) -> None:
+    """Starting a second one while the first still holds the port is not a
+    restart. open.sh starts nothing while the port answers, so the old process
+    would go on serving the old code and nothing would say otherwise."""
+    victim = sp.Popen(["/bin/sleep", "30"])
+    (stub / "service.pid").write_text(f"{victim.pid}\n")
+    try:
+        run(
+            ["restart"],
+            stub,
+            script=launchctl.script,
+            env=dict(launchctl.env, HOME=str(account_with_an_install)),
+        )
+        try:
+            assert victim.wait(timeout=5) != 0
+        except sp.TimeoutExpired:
+            pytest.fail("the process this copy had running was left alone")
+    finally:
+        victim.kill()
+
+
+def test_a_normal_install_is_still_restarted_through_its_login_service(
+    stub, launchctl, account_with_an_install
+) -> None:
+    """The fix must not cost the ordinary Mac its restart: handing the service
+    back to launchd is the only thing that restarts what launchd keeps alive.
+
+    This is the one test in the file that runs with the flag off, so it is also
+    the one that must not be able to reach a real login service. It cannot:
+    HOME is a temporary directory, and the command it runs has no path to
+    /bin/launchctl.
+    """
+    result = run(
+        ["restart"],
+        stub,
+        script=launchctl.script,
+        env=dict(
+            launchctl.env,
+            HOME=str(account_with_an_install),
+            SF_HOUSING_NO_LAUNCH_AGENT="0",
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert launchctl.calls == [f"kickstart -k gui/{os.getuid()}/com.sfhousing.monitor"]
+
+
+def test_a_normal_install_with_no_login_service_is_sent_to_repair(stub, launchctl) -> None:
+    """Nothing to restart and nothing to kickstart. Saying so beats a silent
+    success, which is what a bare `launchctl kickstart || true` would give."""
+    result = run(
+        ["restart"],
+        stub,
+        script=launchctl.script,
+        env=dict(
+            launchctl.env,
+            HOME=str(stub / "empty-home"),
+            SF_HOUSING_NO_LAUNCH_AGENT="0",
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "homefinder repair" in result.stdout + result.stderr
+    assert launchctl.calls == []
+
+
+def test_updating_an_isolated_copy_restarts_it_rather_than_miscounting_it() -> None:
+    """Read rather than run: the branch this guards downloads and installs a
+    release, which a test suite must not do.
+
+    The installer hands a normal install back to launchd, which starts it on the
+    new files. An isolated copy has no launchd to be handed to, and the
+    installer's own open.sh starts nothing while the old process is still
+    answering -- so the files were upgraded underneath a process that went on
+    serving the version it started with, and the version check below then
+    reported "it was already the newest version" about an upgrade that had
+    happened.
+    """
+    text = CLI.read_text()
+    branch = text[text.index("  update)"):text.index("  repair)")]
+
+    assert "restart_isolated" in branch, "an isolated copy is left serving the old code"
+    assert branch.index('/bin/bash -c "$INSTALL_LINE"') < branch.index("restart_isolated"), (
+        "it restarts before the new files are in place"
+    )
+    assert branch.index("restart_isolated") < branch.index('after="$(health | field version'), (
+        "the version is read before the restart it is meant to confirm"
+    )
+
+
+# A stand-in for the running copy that does not let go of the port the instant
+# it is asked to stop. Shutting down takes longer on slow machines and busy
+# ones, which are the same machines where a restart that quietly did not happen
+# is hardest to notice.
+LINGERING_APP = """
+import http.server, json, os, signal, sys, threading
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({"ok": True, "app": "sf-home-finder"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+signal.signal(signal.SIGTERM, lambda *_: threading.Timer(2.0, os._exit, [0]).start())
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+"""
+
+
+def test_the_isolated_copy_is_started_again_only_once_the_old_one_has_let_go(
+    stub, launchctl, account_with_an_install, tmp_path
+) -> None:
+    """open.sh starts nothing while the port still answers -- that is how it
+    avoids two copies fighting over one port. So asking it to start again before
+    the old process has finished going leaves the old code serving, having said
+    "Restarting" and meaning it.
+    """
+    port = free_port()
+    source = tmp_path / "lingering_app.py"
+    source.write_text(LINGERING_APP)
+    old = sp.Popen([sys.executable, str(source), str(port)])
+    (stub / "service.pid").write_text(f"{old.pid}\n")
+
+    witness = tmp_path / "port-when-started"
+    opener = stub / "tools" / "open.sh"
+    opener.write_text(
+        "#!/bin/bash\n"
+        'if /usr/bin/curl -fsS --max-time 2 "http://127.0.0.1:$SF_HOUSING_PORT/health" '
+        ">/dev/null 2>&1; then\n"
+        '  printf "still-serving\\n" > "$WITNESS"\n'
+        "else\n"
+        '  printf "port-free\\n" > "$WITNESS"\n'
+        "fi\n"
+        'echo opened "$@"\n'
+    )
+    opener.chmod(0o755)
+
+    try:
+        for _ in range(50):
+            with socket.socket() as probe:
+                if probe.connect_ex(("127.0.0.1", port)) == 0:
+                    break
+            time.sleep(0.1)
+        else:
+            pytest.fail("the stand-in app never came up")
+
+        result = run(
+            ["restart"],
+            stub,
+            port=str(port),
+            script=launchctl.script,
+            env=dict(
+                launchctl.env,
+                HOME=str(account_with_an_install),
+                WITNESS=str(witness),
+            ),
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert witness.read_text().strip() == "port-free", (
+            "it was started again while the old copy still had the port"
+        )
+    finally:
+        old.kill()

@@ -1,3 +1,26 @@
+SF Home Finder 0.5.5
+
+Three things, all of them from watching somebody install this on their own Mac
+for the first time.
+
+The homefinder command now works in the window you installed from. The
+installer adds a line to your shell profile so that new terminal windows can
+find it, but the window you are already looking at read that file when it
+opened, so typing homefinder there said "command not found". It now shows the
+two ways that work immediately, in the window you are in.
+
+Near matches means near. It used to hold every home that was not on the
+shortlist, which on a real board meant 7,785 homes -- 7,625 of which the deal
+had ruled out outright, for the wrong number of bedrooms or twice the budget.
+It now holds only homes that came within ten points of your cut-off: 127
+rather than 7,785 on that same board, so the list is worth opening again.
+Nothing is hidden; everything collected is still in the full archive.
+
+Installing downloads about six megabytes less and installs ten fewer packages.
+The app was asking for a bundle of extras it never used: a file watcher for
+reloading code as you edit it, a websocket library, and two speed-ups meant
+for servers with more than one user.
+
 SF Home Finder 0.5.4
 
 Checking for new homes takes less time, the very first check included.

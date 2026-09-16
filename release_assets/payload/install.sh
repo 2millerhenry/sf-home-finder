@@ -3,7 +3,7 @@ set -euo pipefail
 
 RELEASE_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 PAYLOAD_DIR="$RELEASE_ROOT/payload"
-VERSION="0.5.4"
+VERSION="0.5.5"
 PYTHON_VERSION="3.12.10"
 PORT="${SF_HOUSING_PORT:-8000}"
 APP_ROOT="${SF_HOUSING_APP_ROOT:-$HOME/Library/Application Support/SF Housing Monitor}"
@@ -26,7 +26,7 @@ RUNTIMES_DIR="$APP_ROOT/runtimes"
 RELEASES_DIR="$APP_ROOT/releases"
 UV_BIN="$PAYLOAD_DIR/uv"
 LOCK_FILE="$PAYLOAD_DIR/requirements.lock"
-WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.4-py3-none-any.whl"
+WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.5-py3-none-any.whl"
 
 say() { printf '%s\n' "$*"; }
 fail() { say "Installation stopped: $*"; exit 1; }
@@ -72,7 +72,7 @@ export UV_PYTHON_INSTALL_DIR="$APP_ROOT/python"
 "$UV_BIN" venv "$STAGE/runtime" --python "$PYTHON_VERSION" --managed-python --no-project --quiet
 "$UV_BIN" pip sync "$LOCK_FILE" --python "$STAGE/runtime/bin/python" --strict --no-progress --quiet
 "$UV_BIN" pip install "$WHEEL_FILE" --python "$STAGE/runtime/bin/python" --no-deps --no-progress --quiet
-"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.4"'
+"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.5"'
 
 if [ -f "$DATA_DIR/housing.sqlite3" ] && [ -x "$APP_ROOT/current/bin/python" ]; then
   /bin/mkdir -p "$APP_ROOT/backups"
@@ -258,13 +258,22 @@ if [ "${CLI_READY:-0}" = 1 ] && [ "${CLI_ON_PATH:-0}" != 1 ]; then
     /bin/mkdir -p "$(/usr/bin/dirname "$PROFILE")"
     printf '\n# Added by SF Home Finder so the homefinder command can be found.\n%s\n' \
       "$PATH_LINE" >> "$PROFILE"
-    say "The 'homefinder' command needs $CLI_DIR on your PATH, so one line was"
-    say "added to $(/usr/bin/basename "$PROFILE"). Open a new Terminal window and it will work."
+  fi
+  # A line in a profile is read by the next shell, not this one. Saying "open a
+  # new Terminal window" is a step somebody has to remember minutes later, and
+  # the first two people to install this typed homefinder in the window they
+  # had just used, got "command not found", and stopped. So both ways that work
+  # right now are on screen, and the profile line only has to matter later.
+  say "The 'homefinder' command lives in $CLI_DIR, which this Terminal window"
+  say "does not know about yet."
+  say ""
+  if [ -n "$PROFILE" ]; then
+    say "  In this window:     source $PROFILE"
+    say "  Or run it directly: $CLI_DIR/homefinder"
+    say "  Any new window already knows it."
   else
-    say "For the 'homefinder' command, add $CLI_DIR to your PATH:"
-    say ""
-    say "  $PATH_LINE"
-    say ""
+    say "  Run it directly:    $CLI_DIR/homefinder"
+    say "  Or put $CLI_DIR on your PATH."
   fi
   say ""
 fi
