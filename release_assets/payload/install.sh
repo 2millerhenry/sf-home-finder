@@ -65,14 +65,34 @@ STAGE="$(/usr/bin/mktemp -d "$APP_ROOT/.install.XXXXXX")"
 cleanup() { /bin/rm -rf "$STAGE"; }
 trap cleanup EXIT
 
-say "Preparing the private Python runtime (the first install needs internet access)..."
 export UV_CACHE_DIR="$APP_ROOT/cache"
 export UV_PYTHON_INSTALL_DIR="$APP_ROOT/python"
-"$UV_BIN" python install "$PYTHON_VERSION" --install-dir "$UV_PYTHON_INSTALL_DIR" --no-bin --no-progress --quiet
-"$UV_BIN" venv "$STAGE/runtime" --python "$PYTHON_VERSION" --managed-python --no-project --quiet
-"$UV_BIN" pip sync "$LOCK_FILE" --python "$STAGE/runtime/bin/python" --strict --no-progress --quiet
-"$UV_BIN" pip install "$WHEEL_FILE" --python "$STAGE/runtime/bin/python" --no-deps --no-progress --quiet
-"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.6"'
+
+# Two downloads used to happen behind one unchanging line, which is most of
+# why the install felt stalled: a private Python, then every library it needs.
+# uv draws perfectly good progress bars and they were being suppressed, so the
+# slowest part of the install was also the only part with nothing to watch.
+# The steps are numbered for the same reason -- four quiet commands read as
+# one hang, four announced ones read as progress.
+#
+# Every one of them says what to do when it fails, because these are the only
+# steps that need the internet and so the only ones that routinely do. Left to
+# `set -e` alone the script exited silently -- `uv --quiet` prints nothing at
+# all on a failed download, so a dropped connection ended the install with the
+# last progress line on screen and no error, no next step and no app. The
+# Windows installer has always said this (Invoke-Uv in windows/payload
+# install.ps1); this is the same sentence.
+UV_FAILED="the private runtime download did not finish. Check your internet connection, then run this again."
+say "1/4  Downloading a private Python (15 MB)..."
+"$UV_BIN" python install "$PYTHON_VERSION" --install-dir "$UV_PYTHON_INSTALL_DIR" --no-bin || fail "$UV_FAILED"
+say "2/4  Creating its own environment..."
+"$UV_BIN" venv "$STAGE/runtime" --python "$PYTHON_VERSION" --managed-python --no-project --quiet || fail "$UV_FAILED"
+say "3/4  Downloading the libraries it needs..."
+"$UV_BIN" pip sync "$LOCK_FILE" --python "$STAGE/runtime/bin/python" --strict || fail "$UV_FAILED"
+say "4/4  Installing SF Home Finder itself..."
+"$UV_BIN" pip install "$WHEEL_FILE" --python "$STAGE/runtime/bin/python" --no-deps --quiet || fail "$UV_FAILED"
+"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.6"' ||
+  fail "the installed app did not pass its version check. Download the ZIP again."
 
 if [ -f "$DATA_DIR/housing.sqlite3" ] && [ -x "$APP_ROOT/current/bin/python" ]; then
   /bin/mkdir -p "$APP_ROOT/backups"
@@ -148,6 +168,18 @@ if [ -f "$PAYLOAD_DIR/gmail-client-secret.json" ] && [ ! -f "$DATA_DIR/gmail-cli
   /bin/chmod 600 "$DATA_DIR/gmail-client-secret.json"
 fi
 
+# The app runs under launchd, which starts it with the plist's environment and
+# nothing else -- a shell profile that exports SF_HOUSING_NO_UPDATE_CHECK never
+# reaches it, so the switch has to be written into the service itself. Kept
+# across upgrades by reading the plist that is already there: an upgrade is run
+# without the variable set far more often than not, and silently turning the
+# update check back on is exactly the surprise this switch exists to avoid.
+NO_UPDATE_CHECK_ENTRY=""
+if [ "${SF_HOUSING_NO_UPDATE_CHECK:-0}" = "1" ] ||
+  /usr/bin/grep -q "SF_HOUSING_NO_UPDATE_CHECK" "$PLIST_PATH" 2>/dev/null; then
+  NO_UPDATE_CHECK_ENTRY="<key>SF_HOUSING_NO_UPDATE_CHECK</key><string>1</string>"
+fi
+
 PLIST_TMP="$STAGE/$LABEL.plist"
 /bin/cat > "$PLIST_TMP" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -163,7 +195,7 @@ PLIST_TMP="$STAGE/$LABEL.plist"
     <string>--port</string><string>$PORT</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>SF_HOUSING_DATA_DIR</key><string>$DATA_DIR</string></dict>
+  <dict><key>SF_HOUSING_DATA_DIR</key><string>$DATA_DIR</string>$NO_UPDATE_CHECK_ENTRY</dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>

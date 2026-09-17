@@ -178,3 +178,42 @@ def test_source_durations_ignore_runs_that_did_not_do_the_work(
     durations = repository.typical_source_seconds()
 
     assert "Skipped" not in durations
+
+
+def test_the_neighborhood_filter_omits_city_wide_values(repository: Repository) -> None:
+    """A dropdown listing both "San Francisco" and "city of san francisco".
+
+    Neighborhoods reach the filter straight from whatever a source wrote, so
+    city-level text arrived as if it named a neighborhood -- twice over, once
+    capitalised and once not, sitting in the list beside Castro and Nob Hill.
+    Scoring already knows these are not neighborhoods; the filter did not.
+    """
+    for index, (where, expected) in enumerate(
+        [
+            ("Castro", True),
+            ("Nob Hill", True),
+            ("San Francisco", False),
+            ("city of san francisco", False),
+            ("SF", False),
+            ("san francisco, ca", False),
+        ]
+    ):
+        repository.upsert_listing(
+            ListingCandidate(
+                platform="Craigslist",
+                source_id=str(index),
+                title=f"Room in {where}",
+                original_url=f"https://example.test/{index}",
+                price=1500,
+                neighborhood=where,
+            ),
+            result(),
+            "2026-09-17T12:00:00+00:00",
+        )
+
+    neighborhoods, _ = repository.filter_options(minimum_score=0)
+
+    assert "Castro" in neighborhoods
+    assert "Nob Hill" in neighborhoods
+    for city_wide in ("San Francisco", "city of san francisco", "SF", "san francisco, ca"):
+        assert city_wide not in neighborhoods, f"{city_wide!r} is a city, not a neighborhood"

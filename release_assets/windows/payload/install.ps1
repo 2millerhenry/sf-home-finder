@@ -124,13 +124,20 @@ try {
     }
   }
 
-  Write-Host 'Preparing the private Python runtime...'
-  Invoke-Uv -Arguments @('python', 'install', $PythonVersion, '--install-dir', (Join-Path $AppRoot 'python'), '--no-bin', '--no-progress')
+  # Two downloads used to happen behind one unchanging line, which is most of
+  # why the install felt stalled: a private Python, then every library it
+  # needs. uv draws perfectly good progress bars and they were suppressed, so
+  # the slowest part of the install was the only part with nothing to watch.
+  Write-Host '1/4  Downloading a private Python (15 MB)...'
+  Invoke-Uv -Arguments @('python', 'install', $PythonVersion, '--install-dir', (Join-Path $AppRoot 'python'), '--no-bin')
+  Write-Host '2/4  Creating its own environment...'
   $stageRuntime = Join-Path $stage 'runtime'
   Invoke-Uv -Arguments @('venv', $stageRuntime, '--python', $PythonVersion, '--managed-python', '--no-project')
   $stagePython = Join-Path $stageRuntime 'Scripts\python.exe'
-  Invoke-Uv -Arguments @('pip', 'sync', $LockFile, '--python', $stagePython, '--strict', '--no-progress')
-  Invoke-Uv -Arguments @('pip', 'install', $WheelFile, '--python', $stagePython, '--no-deps', '--no-progress')
+  Write-Host '3/4  Downloading the libraries it needs...'
+  Invoke-Uv -Arguments @('pip', 'sync', $LockFile, '--python', $stagePython, '--strict')
+  Write-Host '4/4  Installing SF Home Finder itself...'
+  Invoke-Uv -Arguments @('pip', 'install', $WheelFile, '--python', $stagePython, '--no-deps')
   & $stagePython -I -c "import sf_housing; assert sf_housing.__version__ == '$Version'"
   if ($LASTEXITCODE -ne 0) { Fail 'the installed app did not pass its version check.' }
 
@@ -169,6 +176,27 @@ try {
   $serviceCommand = '"' + (Join-Path $ToolsDir 'run-service.cmd') + '"'
   & schtasks.exe /Create /TN $TaskName /TR $serviceCommand /SC ONLOGON /RL LIMITED /F | Out-Null
   if ($LASTEXITCODE -ne 0) { Fail 'Windows could not create the normal-user startup task. No administrator account is required, but this Windows account must be allowed to create scheduled tasks.' }
+  # schtasks writes a task with Windows' defaults, and those defaults are
+  # written for a desktop: do not start on battery, stop the moment the machine
+  # switches to battery, kill it after three days of uptime, never restart it.
+  # On the laptop this app is for, that is a service that dies when the charger
+  # comes out and stays dead until the next sign-in -- while the macOS side has
+  # KeepAlive and no conditions at all. These four make the two the same
+  # promise, which is the one the README makes.
+  #
+  # Never fatal: an install whose app is already serving is a good install, and
+  # a Windows build too old for these cmdlets should lose the improvement, not
+  # the install.
+  try {
+    Set-ScheduledTask -TaskName $TaskName -Settings (New-ScheduledTaskSettingsSet `
+      -AllowStartIfOnBatteries `
+      -DontStopIfGoingOnBatteries `
+      -ExecutionTimeLimit ([TimeSpan]::Zero) `
+      -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+      -MultipleInstances IgnoreNew) -ErrorAction Stop | Out-Null
+  } catch {
+    Write-Host 'Note: Windows kept its default power settings for the startup task. The app still runs; it may pause on battery.'
+  }
   & schtasks.exe /Run /TN $TaskName | Out-Null
   if ($LASTEXITCODE -ne 0 -or -not (Wait-ForMonitor)) { Fail "the local dashboard did not become healthy. Run Repair; details are in $LogDir." }
   Write-Host "Installed. Your profile and history stay in: $DataDir"

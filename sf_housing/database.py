@@ -555,7 +555,11 @@ class Repository:
         return [(int(row["id"]), self._row_to_candidate(row)) for row in rows]
 
     def shortlist_pool(
-        self, kinds: Sequence[str] = (), ceiling: int = 900, strata: int = 4
+        self,
+        kinds: Sequence[str] = (),
+        ceiling: int = 900,
+        strata: int = 4,
+        unit_types: Sequence[str] = (),
     ) -> tuple[list[tuple[int, ListingCandidate]], dict[int, int], bool]:
         """The homes a cut-off would be measured against, whole or sampled.
 
@@ -570,6 +574,11 @@ class Repository:
 
         ``housing_kind`` is different and does belong here: it says what a home
         *is*, not what anybody wants, so it narrows the pool without dating it.
+        ``unit_types`` is the same kind of fact -- how many bedrooms the source
+        stated -- and belongs here for the same reason, because the whole-home
+        tabs are one per size and a home of another size, or of none stated,
+        has no page to appear on. Leaving it out counted 133 such homes into a
+        draft's answer at every cut-off below 55 on a real board.
 
         Above ``ceiling`` it is sampled instead, in bands of rent crossed with
         bands of the score each home already has.
@@ -597,6 +606,10 @@ class Repository:
         if wanted:
             clauses.append(f"housing_kind IN ({','.join('?' for _ in wanted)})")
             parameters.extend(wanted)
+        sizes = [str(value) for value in unit_types if str(value)]
+        if sizes:
+            clauses.append(f"unit_type IN ({','.join('?' for _ in sizes)})")
+            parameters.extend(sizes)
         where = " AND ".join(clauses)
         with self.connection() as connection:
             index = connection.execute(
@@ -921,7 +934,10 @@ class Repository:
         return [{"reason": reason, "count": count} for reason, count in ordered[:limit]]
 
     def shortlist_counts(
-        self, thresholds: Sequence[int], kinds: Sequence[str] = ()
+        self,
+        thresholds: Sequence[int],
+        kinds: Sequence[str] = (),
+        unit_types: Sequence[str] = (),
     ) -> dict[int, int]:
         """How many homes each cut-off would put on the shortlist.
 
@@ -931,13 +947,33 @@ class Repository:
         deal for rooms alone counted whole units it would never display, and the
         slider read six higher than the page. One pass over the scores rather
         than one query per stop.
+
+        Two narrowings the active view does and this did not, which is the
+        whole of the number disagreeing with the page:
+
+        ``eligibility`` -- a home the deal rules out keeps its stored score and
+        is never shown. Counting it put 3,905 ruled-out homes under a cut-off of
+        30 on a real board, which read 4,357 against a page holding 319.
+
+        ``unit_types`` -- the tabs are per size, so a whole home whose size the
+        source never stated, or whose size this deal did not enable, has no page
+        to appear on. Thirty-two of those sat inside the 316 the slider claimed
+        at the saved cut-off while the two tabs held 284 between them. Rooms
+        have no per-size tabs, so a room deal passes none and nothing narrows.
         """
-        clauses = ["status IN ('active', 'saved')"]
+        clauses = [
+            "status IN ('active', 'saved')",
+            "eligibility IN ('eligible', 'needs_verification')",
+        ]
         parameters: list[Any] = []
         wanted = [str(kind) for kind in kinds if str(kind)]
         if wanted:
             clauses.append(f"housing_kind IN ({','.join('?' for _ in wanted)})")
             parameters.extend(wanted)
+        sizes = [str(value) for value in unit_types if str(value)]
+        if sizes:
+            clauses.append(f"unit_type IN ({','.join('?' for _ in sizes)})")
+            parameters.extend(sizes)
         with self.connection() as connection:
             scores = [
                 int(row[0])
@@ -1133,6 +1169,14 @@ class Repository:
         if selected_types:
             type_clause = " AND unit_type IN (" + ", ".join("?" for _ in selected_types) + ")"
             type_parameters.extend(selected_types)
+        # Sources write whatever they have in the location field, and for some
+        # of them that is the city. Scoring has always treated those as an
+        # absent neighborhood; the filter did not, so "San Francisco" and
+        # "city of san francisco" sat in the list beside Castro and Nob Hill
+        # as though a reader could choose between them. Filtered here rather
+        # than in SQL so the one definition in scoring stays the only one.
+        from .scoring import GENERIC_LOCATIONS
+
         with self.connection() as connection:
             neighborhoods = [
                 row[0]
@@ -1144,6 +1188,7 @@ class Repository:
                        ORDER BY neighborhood COLLATE NOCASE""",
                     (minimum_score, housing_kind, *type_parameters),
                 )
+                if str(row[0]).strip().casefold() not in GENERIC_LOCATIONS
             ]
             platforms = [
                 row[0]
