@@ -45,8 +45,14 @@ async function fingerprint(ip, date, salt) {
     .slice(0, 32);
 }
 
+// Cloudflare's free tier allows a thousand KV writes a day. One person is
+// worth at most this many of them, so a retry loop or a refresh-happy
+// afternoon cannot spend the day's budget on a single address and leave real
+// installs uncounted.
+const MAX_WRITES_PER_ADDRESS = 10;
+
 /** Record one fetch. Never throws: a failed tally is not a failed install. */
-async function tally(request, env) {
+async function tally(request, env, source = "script") {
   try {
     const ip = request.headers.get("CF-Connecting-IP");
     if (!ip || !env.COUNTER) return;
@@ -76,9 +82,14 @@ async function tally(request, env) {
     // number of keys and needs no read at all.
     const { metadata } = await env.COUNTER.getWithMetadata(key);
     const seen = parseInt(metadata?.n ?? "0", 10) || 0;
+
+    // Past the cap the person is already counted and the repeat number is
+    // already a floor, so there is nothing left worth a write.
+    if (seen >= MAX_WRITES_PER_ADDRESS) return;
+
     await env.COUNTER.put(key, "1", {
       expirationTtl: KEEP_SECONDS,
-      metadata: { n: seen + 1 },
+      metadata: { n: seen + 1, p: metadata?.p ?? source },
     });
   } catch {
     // Deliberately silent. Nothing about counting is worth a 500 to somebody
@@ -113,6 +124,52 @@ async function install(request, env, ctx) {
       "Cache-Control": "no-store",
     },
   });
+}
+
+/** The current release's asset for one platform, or null.
+ *
+ * Asked of GitHub rather than hardcoded, so a new release is picked up
+ * without touching this worker. Cached at the edge for five minutes: a
+ * release changes a few times a month and this runs on every download.
+ */
+async function assetUrl(match) {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${REPO}/releases/latest`,
+      {
+        cf: { cacheTtl: 300, cacheEverything: true },
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "sf-home-finder-install-counter",
+        },
+      },
+    );
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const asset = (payload.assets ?? []).find((a) => String(a.name).includes(match));
+    return asset?.browser_download_url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** A platform zip, counted on the way past.
+ *
+ * The Mac one-liner was countable because it fetches a script from here. A
+ * zip downloaded straight from the releases page never touches this worker,
+ * which left every Windows install invisible. Redirecting through here fixes
+ * that for anybody following the README; somebody who browses to the releases
+ * page directly is still uncounted, exactly as a Mac user who does the same
+ * has always been.
+ */
+async function download(request, env, ctx, match, fallbackName) {
+  const url = await assetUrl(match);
+  if (!url) {
+    // Better the releases page than a dead end.
+    return Response.redirect(`https://github.com/${REPO}/releases/latest`, 302);
+  }
+  ctx.waitUntil(tally(request, env, fallbackName));
+  return Response.redirect(url, 302);
 }
 
 /** A donation, as Ko-fi reports it the moment it happens.
@@ -186,9 +243,11 @@ async function stats(request, env) {
     const page = await env.COUNTER.list({ prefix: "u:", cursor, limit: 1000 });
     for (const { name, metadata } of page.keys) {
       const date = name.split(":")[1];
-      days[date] ??= { unique: 0, hits: 0 };
+      days[date] ??= { unique: 0, hits: 0, by: {} };
       days[date].unique += 1;
       days[date].hits += parseInt(metadata?.n ?? "1", 10) || 1;
+      const where = metadata?.p ?? "script";
+      days[date].by[where] = (days[date].by[where] ?? 0) + 1;
     }
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor);
@@ -218,6 +277,8 @@ export default {
     const { pathname } = new URL(request.url);
     if (pathname === "/stats") return stats(request, env);
     if (pathname === "/kofi") return kofi(request, env);
+    if (pathname === "/windows.zip") return download(request, env, ctx, "Windows", "windows");
+    if (pathname === "/mac.zip") return download(request, env, ctx, "macOS", "mac");
     if (pathname === "/install.sh" || pathname === "/") return install(request, env, ctx);
     return Response.redirect(`https://github.com/${REPO}`, 302);
   },

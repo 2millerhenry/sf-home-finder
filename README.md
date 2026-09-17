@@ -37,8 +37,7 @@ it is sitting still, it is working. Your browser opens by itself when it is done
 
 <br>
 
-1. **[Download the ZIP](https://github.com/2millerhenry/sf-home-finder/releases/latest)**
-   and double-click to unpack it.
+1. **[Download the ZIP](https://sf-home-finder-install.sfhomefinder.workers.dev/mac.zip)** and double-click to unpack it.
 2. Open the folder. **Control-click** `2 Install SF Home Finder.command`, choose **Open**, then
    **Open** again.
 3. Wait a few minutes. Your browser opens on its own.
@@ -56,8 +55,7 @@ either way.
 
 <br>
 
-1. **[Download the Windows ZIP](https://github.com/2millerhenry/sf-home-finder/releases/latest)**
-   — the file ending `Windows-x64.zip`.
+1. **[Download the Windows ZIP](https://sf-home-finder-install.sfhomefinder.workers.dev/windows.zip)**.
 2. **Unzip it first.** Then open the folder and double-click
    `2 Install SF Home Finder.cmd`.
 3. Wait a few minutes. Your browser opens on its own.

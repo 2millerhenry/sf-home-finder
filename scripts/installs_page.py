@@ -148,12 +148,21 @@ def _installs_stat(counter: dict, counting: bool) -> str:
     if not people:
         return _stat("People installing", "nobody yet", "counter live, waiting", "waiting")
     fetches = sum(int(counter[d].get("hits") or 0) for d in days)
-    return _stat(
-        "People installing",
-        people,
-        f"one address per day · <b>{fetches}</b> fetches",
-        "lead",
+
+    # Where they came from, which is the only way a Windows audience shows up
+    # as anything other than an unexplained gap between installs and
+    # downloads. An address is attributed to whatever it fetched first that
+    # day, so one person counts once, on one platform.
+    where: dict[str, int] = {}
+    for day in days:
+        for source, n in (counter[day].get("by") or {}).items():
+            where[source] = where.get(source, 0) + int(n or 0)
+    label = {"script": "Mac one-liner", "mac": "Mac zip", "windows": "Windows"}
+    spread = " · ".join(
+        f"<b>{n}</b> {label.get(k, k)}" for k, n in sorted(where.items(), key=lambda kv: -kv[1])
     )
+    note = f"one address per day · <b>{fetches}</b> fetches"
+    return _stat("People installing", people, f"{note}<br>{spread}" if spread else note, "lead")
 
 
 def _downloads_stat(snapshots: list[dict]) -> str:
