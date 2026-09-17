@@ -126,13 +126,39 @@ async function install(request, env, ctx) {
   });
 }
 
+/** How long a resolved asset URL is trusted before GitHub is asked again. */
+const ASSET_FRESH_SECONDS = 3600;
+
 /** The current release's asset for one platform, or null.
  *
- * Asked of GitHub rather than hardcoded, so a new release is picked up
- * without touching this worker. Cached at the edge for five minutes: a
- * release changes a few times a month and this runs on every download.
+ * GitHub allows sixty unauthenticated API calls an hour per address, and
+ * Cloudflare's own cache is per-datacenter -- so a link that does well in
+ * several regions at once can exhaust that even though each colo is only
+ * asking occasionally. The answer changes a few times a month, so it is kept
+ * in KV, which every datacenter shares.
+ *
+ * Three sources in order of preference: a fresh stored answer, GitHub, then
+ * a stale stored answer. The last one matters most -- if GitHub is rate
+ * limiting or down, last month's release link still downloads something that
+ * works, which beats sending somebody to a page to hunt for it.
  */
-async function assetUrl(match) {
+async function assetUrl(env, match) {
+  const key = `a:${match}`;
+  let stale = null;
+
+  if (env.COUNTER) {
+    try {
+      const { value, metadata } = await env.COUNTER.getWithMetadata(key);
+      if (value) {
+        const age = Date.now() - (metadata?.at ?? 0);
+        if (age >= 0 && age < ASSET_FRESH_SECONDS * 1000) return value;
+        stale = value;
+      }
+    } catch {
+      // KV is a cache here, never the reason a download fails.
+    }
+  }
+
   try {
     const response = await fetch(
       `https://api.github.com/repos/${REPO}/releases/latest`,
@@ -144,13 +170,26 @@ async function assetUrl(match) {
         },
       },
     );
-    if (!response.ok) return null;
-    const payload = await response.json();
-    const asset = (payload.assets ?? []).find((a) => String(a.name).includes(match));
-    return asset?.browser_download_url ?? null;
+    if (response.ok) {
+      const payload = await response.json();
+      const asset = (payload.assets ?? []).find((a) => String(a.name).includes(match));
+      const url = asset?.browser_download_url ?? null;
+      if (url) {
+        if (env.COUNTER) {
+          try {
+            await env.COUNTER.put(key, url, { metadata: { at: Date.now() } });
+          } catch {
+            // Serving the download matters more than remembering it.
+          }
+        }
+        return url;
+      }
+    }
   } catch {
-    return null;
+    // Fall through to whatever was stored.
   }
+
+  return stale;
 }
 
 /** A platform zip, counted on the way past.
@@ -163,7 +202,7 @@ async function assetUrl(match) {
  * has always been.
  */
 async function download(request, env, ctx, match, fallbackName) {
-  const url = await assetUrl(match);
+  const url = await assetUrl(env, match);
   if (!url) {
     // Better the releases page than a dead end.
     return Response.redirect(`https://github.com/${REPO}/releases/latest`, 302);
