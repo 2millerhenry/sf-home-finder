@@ -79,7 +79,9 @@ Not in this release. The most recent Windows build is on an [earlier release](ht
 """ % REPO
         windows_checksum = ""
 
-    print(f"""Finding a place in San Francisco is miserable. This watches 18 rental sites for you, twice a day, on your own laptop — ranked against what you actually want.
+    print(f"""SF housing is miserable. Finding a place feels impossible, and paying for it is even worse.
+
+SF Home Finder watches 18 rental sites, from public housing listings to Zillow, and refreshes twice a day. It ranks every place by your budget, neighborhoods, and everything else you care about. Free forever. No ads. Runs entirely on your laptop.
 
 <img src="{RAW}/shortlist.png" alt="The shortlist: homes ranked by how well they match, each row showing the score, rent, neighborhood and source">
 

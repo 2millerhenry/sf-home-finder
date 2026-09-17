@@ -2,13 +2,11 @@
 
 [![CI](https://github.com/2millerhenry/sf-home-finder/actions/workflows/ci.yml/badge.svg)](https://github.com/2millerhenry/sf-home-finder/actions/workflows/ci.yml)
 
-Finding a place in San Francisco is miserable right now. Rent is about as high as it has ever
-been, the tech money is back, and anything decent is gone before you have finished reading it.
-You end up with fourteen tabs open, checking the same sites at midnight, and still missing
-things.
+SF housing is miserable. Finding a place feels impossible, and paying for it is even worse.
 
-I built this for my own search. Figured other people might get some use out of it, so here it
-is. It is free, it runs on your own laptop, and it takes about three minutes to start.
+SF Home Finder watches 18 rental sites, from public housing listings to Zillow, and refreshes
+twice a day. It ranks every place by your budget, neighborhoods, and everything else you care
+about. Free forever. No ads. Runs entirely on your laptop.
 
 <img alt="Dragging the match slider from 50 up to 88: the count falls from every possible home to the three excellent ones, and the shortlist behind it re-ranks as it goes, each row showing its score, rent, neighborhood and source" src="docs/screenshots/launch.gif">
 
