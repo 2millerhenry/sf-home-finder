@@ -36,7 +36,10 @@ INSTALL_COMMAND = re.compile(
     r"(?m)^(#?[ \t]*curl -fsSL )(https://\S+?install\.sh)( \| bash)"
 )
 
-TARGETS = ("README.md", "install.sh")
+# The release page is the third place the command appears, and the one most
+# easily forgotten: it is generated per release, so a stale URL there quietly
+# ships an uncounted install with every future version.
+TARGETS = ("README.md", "install.sh", "scripts/release_page.py")
 
 
 def normalise(raw: str) -> str:

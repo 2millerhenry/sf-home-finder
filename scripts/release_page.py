@@ -92,7 +92,7 @@ Takes about three minutes and never asks for a password.
 Apple Silicon (M1 or later), macOS 15.6 or newer. Intel Macs are not supported yet. Paste this into Terminal:
 
 ```
-curl -fsSL https://github.com/{REPO}/raw/HEAD/install.sh | bash
+curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
 ```
 
 *19 MB · no password, no admin · your browser opens by itself when it is done*

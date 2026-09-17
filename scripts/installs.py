@@ -637,7 +637,11 @@ def main(argv: list[str] | None = None) -> int:
 
         target = installs_page.write(updated, ROOT / "reach.html")
         print(f"\n  Page written to {target}")
-        if sys.platform == "darwin":
+        # Opened only when a person is watching. The scheduled run exists to
+        # keep the record from going stale, and a browser window arriving on
+        # its own every morning is how somebody comes to resent it.
+        interactive = sys.stdout.isatty()
+        if interactive and sys.platform == "darwin":
             subprocess.run(["open", str(target)], check=False)
 
     return 0
