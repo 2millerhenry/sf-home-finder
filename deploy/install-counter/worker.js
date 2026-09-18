@@ -55,10 +55,16 @@ const MAX_WRITES_PER_ADDRESS = 10;
 async function tally(request, env, source = "script") {
   try {
     const ip = request.headers.get("CF-Connecting-IP");
-    if (!ip || !env.COUNTER) return;
+    // No salt, no tally. Without one the stored key is a plain SHA-256 of the
+    // address and the date, and there are only four billion addresses: the
+    // whole space was recovered in about three CPU-hours when this was
+    // measured, so the "cannot be turned back into an address" promise would
+    // be false. A deploy that forgets the secret should lose the count rather
+    // than quietly keep reversible records of who installed it.
+    if (!ip || !env.COUNTER || !env.SALT) return;
     const date = today();
 
-    const key = `u:${date}:${await fingerprint(ip, date, env.SALT ?? "")}`;
+    const key = `u:${date}:${await fingerprint(ip, date, env.SALT)}`;
 
     // One key per address per day. The people count is then the number of
     // keys, which no amount of concurrency can distort -- writing the same
@@ -142,8 +148,8 @@ const ASSET_FRESH_SECONDS = 3600;
  * limiting or down, last month's release link still downloads something that
  * works, which beats sending somebody to a page to hunt for it.
  */
-async function assetUrl(env, match) {
-  const key = `a:${match}`;
+async function assetUrl(env, match, suffix) {
+  const key = `a:${match}${suffix}`;
   let stale = null;
 
   if (env.COUNTER) {
@@ -172,7 +178,17 @@ async function assetUrl(env, match) {
     );
     if (response.ok) {
       const payload = await response.json();
-      const asset = (payload.assets ?? []).find((a) => String(a.name).includes(match));
+      // Matched on the extension as well as the platform, because a release
+      // carries more than one asset per platform: a checksum beside every
+      // archive, and now a .tar.xz beside the macOS .zip. A substring match
+      // had exactly one candidate when it was written and silently acquires
+      // more as the release grows -- GitHub returns assets name-ascending, so
+      // "...macOS-arm64.tar.xz" would win a bare "macOS" match and this route
+      // would hand a browser the tarball from a link that says ZIP.
+      const asset = (payload.assets ?? []).find((a) => {
+        const name = String(a.name);
+        return name.includes(match) && name.endsWith(suffix);
+      });
       const url = asset?.browser_download_url ?? null;
       if (url) {
         if (env.COUNTER) {
@@ -201,8 +217,8 @@ async function assetUrl(env, match) {
  * page directly is still uncounted, exactly as a Mac user who does the same
  * has always been.
  */
-async function download(request, env, ctx, match, fallbackName) {
-  const url = await assetUrl(env, match);
+async function download(request, env, ctx, match, suffix, fallbackName) {
+  const url = await assetUrl(env, match, suffix);
   if (!url) {
     // Better the releases page than a dead end.
     return Response.redirect(`https://github.com/${REPO}/releases/latest`, 302);
@@ -316,8 +332,8 @@ export default {
     const { pathname } = new URL(request.url);
     if (pathname === "/stats") return stats(request, env);
     if (pathname === "/kofi") return kofi(request, env);
-    if (pathname === "/windows.zip") return download(request, env, ctx, "Windows", "windows");
-    if (pathname === "/mac.zip") return download(request, env, ctx, "macOS", "mac");
+    if (pathname === "/windows.zip") return download(request, env, ctx, "Windows", ".zip", "windows");
+    if (pathname === "/mac.zip") return download(request, env, ctx, "macOS", ".zip", "mac");
     if (pathname === "/install.sh" || pathname === "/") return install(request, env, ctx);
     return Response.redirect(`https://github.com/${REPO}`, 302);
   },

@@ -10,7 +10,17 @@ Written once here rather than by hand each release, so the page a stranger
 lands on does not depend on which day it was published.
 
     python scripts/release_page.py 0.4.5 > body.md
-    gh release create v0.4.5 dist/...zip --notes-file body.md
+
+Upload BOTH archives. install.sh prefers the .tar.xz and silently falls back to
+the .zip, so a release published with only the zip costs every user the larger
+download and nothing anywhere fails to say so. README's headline size figure is
+prose, not computed -- when the first tarball release ships, that line changes
+from 19 MB to the tarball's size.
+    gh release create v0.4.5 dist/...tar.xz dist/...zip --notes-file body.md
+
+Both macOS archives go up, and the tarball is not optional: the one-line
+install looks for it first and falls back to the zip, so a release published
+without it quietly hands every user the larger download.
 """
 
 from __future__ import annotations
@@ -56,6 +66,19 @@ def main() -> None:
         raise SystemExit(f"Build it first: {archive} is missing")
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 
+    # The command below downloads the tarball, not the zip, so its checksum is
+    # the one somebody checking that download needs -- and the size printed
+    # under the command has to be the size of the file the command fetches.
+    # Both fall back to the zip's, because a release built before the tarball
+    # existed still has a page to publish.
+    tarball = ROOT / "dist" / f"SF-Home-Finder-{version}-macOS-arm64.tar.xz"
+    if tarball.is_file():
+        mac_size = f"{round(tarball.stat().st_size / 1_000_000)} MB"
+        mac_checksum = f"\n{hashlib.sha256(tarball.read_bytes()).hexdigest()}  {tarball.name}"
+    else:
+        mac_size = f"{round(archive.stat().st_size / 1_000_000)} MB"
+        mac_checksum = ""
+
     # Named only when it is actually being published. A page that offers a
     # Windows download the release does not carry sends somebody to a 404, and
     # a page that stays silent about Windows when the zip is right there sends
@@ -97,7 +120,7 @@ Apple Silicon (M1 or later), macOS 15.6 or newer. Intel Macs are not supported y
 curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
 ```
 
-*19 MB · no password, no admin · your browser opens by itself when it is done*
+*{mac_size} · no password, no admin · your browser opens by itself when it is done*
 {windows_install}
 Once it opens, fill in **Your deal**, press save, and the first search starts.
 
@@ -126,7 +149,7 @@ Unpack it, then **Control-click** `2 Install SF Home Finder.command` and choose 
 {changes_for(version)}
 
 ```
-{digest}  {archive.name}{windows_checksum}
+{digest}  {archive.name}{mac_checksum}{windows_checksum}
 ```
 
 </details>""")

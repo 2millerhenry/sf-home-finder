@@ -8,6 +8,12 @@ name: CI
 # So the Windows job below is not a lint. It builds the release, installs it
 # the way a person would, waits for the dashboard to answer, and asks it a real
 # question, on a real Windows machine. If that job is green the download works.
+#
+# The macOS install job does the same for the one-line install. That command is
+# the only code every Mac user runs and nothing in the unit suite reaches it:
+# it picks an asset out of a release, unpacks it and hands over. It is run here
+# against both archives a release publishes, because which one a person gets
+# depends on when they installed.
 
 on:
   push:
@@ -34,6 +40,171 @@ jobs:
         # the runner happens to have newest. pytest is an optional extra here,
         # so it has to be asked for by name.
         run: uv run --python 3.12 --extra test pytest
+
+  macos-install:
+    name: macOS install, end to end
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      # Two installs on one runner, neither on the port a person would use, so
+      # the second cannot be mistaken for the first still answering.
+      TAR_PORT: "8901"
+      ZIP_PORT: "8902"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.8"
+
+      - name: Build the release, both archives
+        run: |
+          python scripts/build_release.py --uv-bin "$(command -v uv)"
+          # Named exactly rather than globbed: a dist folder with an older
+          # build still in it would otherwise make every size and checksum
+          # check below measure whichever file the glob happened to match.
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)
+          name="SF-Home-Finder-$version-macOS-arm64"
+          {
+            echo "RELEASE_VERSION=$version"
+            echo "RELEASE_ZIP=$PWD/dist/$name.zip"
+            echo "RELEASE_TAR=$PWD/dist/$name.tar.xz"
+          } >> "$GITHUB_ENV"
+
+      - name: The tarball is worth publishing
+        run: |
+          # The only reason the second archive exists. A preset or compressor
+          # regression would leave every other check here green while quietly
+          # handing the download back its size.
+          zip=$(stat -f%z "$RELEASE_ZIP")
+          tar=$(stat -f%z "$RELEASE_TAR")
+          echo "zip=$zip tar.xz=$tar"
+          python3 -c "import sys; sys.exit(0 if $tar <= $zip * 0.75 else 1)" ||
+            { echo "the tarball is not at least 25% smaller than the zip"; exit 1; }
+          (cd dist && shasum -a 256 -c "$RELEASE_TAR.sha256")
+          (cd dist && shasum -a 256 -c "$RELEASE_ZIP.sha256")
+
+      - name: Both archives unpack to the same folder, with stock tooling
+        run: |
+          mkdir -p "$RUNNER_TEMP/from-tar" "$RUNNER_TEMP/from-zip"
+          # PATH stripped to what a Mac ships with: if this ever needs an xz
+          # from Homebrew, the install command has grown a dependency.
+          env -i PATH=/usr/bin:/bin /usr/bin/tar -xJf "$RELEASE_TAR" -C "$RUNNER_TEMP/from-tar"
+          env -i PATH=/usr/bin:/bin /usr/bin/unzip -q "$RELEASE_ZIP" -d "$RUNNER_TEMP/from-zip"
+          # Compared by what came out rather than by the archives: a zip entry
+          # and a tar entry are different records of the same file.
+          describe() { (cd "$1" && find . | sort | while read -r p; do
+            if [ -d "$p" ]; then printf '%s dir %s\n' "$(stat -f%Lp "$p")" "$p"
+            else printf '%s %s %s\n' "$(stat -f%Lp "$p")" "$(shasum -a 256 "$p" | cut -d' ' -f1)" "$p"; fi
+          done); }
+          describe "$RUNNER_TEMP/from-tar" > "$RUNNER_TEMP/tar.list"
+          describe "$RUNNER_TEMP/from-zip" > "$RUNNER_TEMP/zip.list"
+          diff "$RUNNER_TEMP/tar.list" "$RUNNER_TEMP/zip.list" ||
+            { echo "the two archives expand to different trees"; exit 1; }
+          root="$(find "$RUNNER_TEMP/from-tar" -maxdepth 3 -type f -path '*/payload/install.sh' | head -1)"
+          root="${root%/payload/install.sh}"
+          echo "RELEASE_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: The release verifies itself out of the tarball
+        run: |
+          # The installer checks every file against this before using it, and
+          # it is written for the zip. tar is a different writer: a mode or a
+          # byte it records differently shows up here and nowhere else.
+          (cd "$RELEASE_ROOT/payload" && shasum -a 256 -c checksums.sha256 > /dev/null)
+          test -x "$RELEASE_ROOT/payload/uv" || { echo "payload/uv is not executable"; exit 1; }
+          "$RELEASE_ROOT/payload/uv" --version
+
+      - name: A GitHub that offers what we just built
+        run: |
+          # Only the release lookup and the download are faked. The script
+          # under test, the archives and both extractors are the real ones.
+          # The payload installer calls /usr/bin/curl by absolute path, so its
+          # own downloads are untouched by this stub.
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/curl" <<CURL
+          #!/bin/bash
+          out=""; url=""
+          while [ \$# -gt 0 ]; do case "\$1" in -o) out="\$2"; shift 2;; -*) shift;; *) url="\$1"; shift;; esac; done
+          printf '%s\n' "\$url" >> "$RUNNER_TEMP/requested.txt"
+          if [ -n "\$out" ]; then
+            case "\$url" in
+              *.tar.xz) [ "\${OFFER_TAR:-1}" = 1 ] || exit 22; cp "$RELEASE_TAR" "\$out" ;;
+              *.zip) cp "$RELEASE_ZIP" "\$out" ;;
+              *) exit 22 ;;
+            esac
+          elif [ "\${OFFER_TAR:-1}" = 1 ]; then
+            printf '{"assets":[{"browser_download_url":"https://example.invalid/SF-Home-Finder-0.0.0-macOS-arm64.zip"},{"browser_download_url":"https://example.invalid/SF-Home-Finder-0.0.0-macOS-arm64.tar.xz"}]}'
+          else
+            printf '{"assets":[{"browser_download_url":"https://example.invalid/SF-Home-Finder-0.0.0-macOS-arm64.zip"}]}'
+          fi
+          CURL
+          chmod +x "$RUNNER_TEMP/bin/curl"
+
+      - name: The one-line install, from the tarball
+        env:
+          SF_HOUSING_NO_LAUNCH_AGENT: "1"
+          SF_HOUSING_NO_BROWSER: "1"
+          SF_HOUSING_NO_UPDATE_CHECK: "1"
+        run: |
+          rm -f "$RUNNER_TEMP/requested.txt"
+          SF_HOUSING_APP_ROOT="$RUNNER_TEMP/app-tar" SF_HOUSING_PORT="$TAR_PORT" \
+            PATH="$RUNNER_TEMP/bin:$PATH" OFFER_TAR=1 bash ./install.sh
+          tail -1 "$RUNNER_TEMP/requested.txt" | grep -q 'tar\.xz$' ||
+            { echo "it downloaded something other than the tarball"; cat "$RUNNER_TEMP/requested.txt"; exit 1; }
+
+      - name: It answers, and it is the version we just built
+        run: |
+          expected="$RELEASE_VERSION"
+          for attempt in $(seq 1 60); do
+            health=$(/usr/bin/curl -fsS --max-time 3 "http://127.0.0.1:$TAR_PORT/health" 2>/dev/null) && break
+            sleep 2
+          done
+          echo "$health"
+          echo "$health" | grep -q '"ok":true' || { echo "it never answered"; exit 1; }
+          echo "$health" | grep -q "\"version\":\"$expected\"" || { echo "not serving $expected"; exit 1; }
+
+      - name: It can actually answer a question about housing
+        run: |
+          # Not a proxy for working. A deal goes in, an estimate of what it
+          # would shortlist comes back: a process that started but cannot do
+          # this is not a working install.
+          reply=$(/usr/bin/curl -fsS --max-time 30 -H "Origin: http://127.0.0.1:$TAR_PORT" \
+            -d 'housing_paths=one_bedroom&one_bedroom_maximum=3200&one_bedroom_ideal=2600&anywhere_in_sf=on&move_in_flexible=on' \
+            "http://127.0.0.1:$TAR_PORT/preferences/deal/preview")
+          echo "$reply"
+          echo "$reply" | grep -q '"ok":true' || { echo "the preview was refused"; exit 1; }
+
+      - name: The zip-only fallback, which is every release published so far
+        env:
+          SF_HOUSING_NO_LAUNCH_AGENT: "1"
+          SF_HOUSING_NO_BROWSER: "1"
+          SF_HOUSING_NO_UPDATE_CHECK: "1"
+        run: |
+          # Not a nicety: until the next release ships, this is the path every
+          # single person who runs the install command takes.
+          rm -f "$RUNNER_TEMP/requested.txt"
+          SF_HOUSING_APP_ROOT="$RUNNER_TEMP/app-zip" SF_HOUSING_PORT="$ZIP_PORT" \
+            PATH="$RUNNER_TEMP/bin:$PATH" OFFER_TAR=0 bash ./install.sh
+          tail -1 "$RUNNER_TEMP/requested.txt" | grep -q '\.zip$' ||
+            { echo "with no tarball offered it did not fall back to the zip"; exit 1; }
+          for attempt in $(seq 1 60); do
+            health=$(/usr/bin/curl -fsS --max-time 3 "http://127.0.0.1:$ZIP_PORT/health" 2>/dev/null) && break
+            sleep 2
+          done
+          echo "$health"
+          echo "$health" | grep -q '"ok":true' || { echo "the zip fallback installed nothing that answers"; exit 1; }
+
+      - name: What the logs said, if any of that failed
+        if: failure()
+        run: |
+          for root in "$RUNNER_TEMP/app-tar" "$RUNNER_TEMP/app-zip"; do
+            echo "===== $root ====="
+            [ -d "$root/logs" ] && for log in "$root"/logs/*; do
+              echo "--- $log ---"; tail -80 "$log"
+            done || echo "no logs"
+          done
 
   windows-install:
     name: Windows install, end to end

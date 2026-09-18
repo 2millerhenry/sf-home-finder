@@ -8,6 +8,7 @@ between releases rather than being rewritten by hand each time and drifting.
 
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import subprocess
 import sys
@@ -37,12 +38,40 @@ def page() -> str:
 
 def test_it_leads_with_what_the_app_is_not_with_the_changelog() -> None:
     """Somebody arriving here has usually never seen the app. A version's own
-    changes are the least interesting thing on the page to them."""
+    changes are the least interesting thing on the page to them.
+
+    Anchored on the sentence that says what the app does rather than on the
+    opening line. The opener is the one line on the page most likely to be
+    rewritten, and a test that goes red when the copy is improved is a test
+    people learn to edit rather than read -- this one had already drifted.
+    """
     text = page()
-    first = text.index("Finding a place in San Francisco")
+    first = text.index("SF Home Finder watches")
     changed = text.index("What changed in")
 
     assert first < text.index("## Install") < changed
+
+
+def test_the_checksum_and_the_size_describe_the_file_the_command_downloads() -> None:
+    """The regression a second archive invites: the install command now takes
+    the .tar.xz, and the page went on printing the zip's checksum and the zip's
+    size. Somebody verifying their download against the only digest on the page
+    would have found it wrong, and the number under the command described a
+    file that command does not fetch."""
+    version = current_version()
+    tarball = ROOT / "dist" / f"SF-Home-Finder-{version}-macOS-arm64.tar.xz"
+    zipped = ROOT / "dist" / f"SF-Home-Finder-{version}-macOS-arm64.zip"
+    if not tarball.is_file():
+        pytest.skip(f"not built: {tarball}")
+    text = page()
+
+    digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
+    assert f"{digest}  {tarball.name}" in text, "the tarball's checksum is not published"
+    assert f"*{round(tarball.stat().st_size / 1_000_000)} MB ·" in text, text[:2000]
+    assert f"*{round(zipped.stat().st_size / 1_000_000)} MB ·" not in text, "it is still the zip's size"
+    # The zip is still published and still double-clicked, so its checksum has
+    # to stay on the page too rather than being replaced by the tarball's.
+    assert f"{hashlib.sha256(zipped.read_bytes()).hexdigest()}  {zipped.name}" in text
 
 
 def test_the_two_ways_back_in_are_both_named() -> None:

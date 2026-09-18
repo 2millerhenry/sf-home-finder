@@ -11,8 +11,9 @@
 # removed however it ends, and it touches nothing outside the app's own folder.
 #
 # There is no Gatekeeper prompt this way, which is a real difference rather than
-# a trick: macOS marks what a *browser* downloads, and curl is not a browser. The
-# bytes are identical to the ZIP either way.
+# a trick: macOS marks what a *browser* downloads, and curl is not a browser.
+# This takes the smaller .tar.xz where the ZIP page takes the ZIP; the folder
+# that comes out of either one is the same folder.
 set -euo pipefail
 
 REPO="2millerhenry/sf-home-finder"
@@ -24,13 +25,36 @@ fail() { printf '\nStopped: %s\n' "$*" >&2; exit 1; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
 echo "Finding the latest release..."
-URL="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
-  sed -n 's/.*"\(https[^"]*macOS-arm64\.zip\)".*/\1/p' | head -1)"
+RELEASE="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")" ||
+  fail "could not reach GitHub. Check your connection and run it again."
+
+# The .tar.xz first: it holds the same folder as the ZIP and is a third
+# smaller, because most of the release is a large binary that deflate barely
+# compresses. The ZIP whenever a release has no tarball, which is every
+# release published before this line was written -- so the fallback is the
+# path that runs until the next one ships, not a nicety.
+URL="$(printf '%s' "$RELEASE" |
+  sed -n 's/.*"\(https[^"]*macOS-arm64\.tar\.xz\)".*/\1/p' | head -1)"
+FORMAT=tar
+ARCHIVE="$WORK/r.tar.xz"
+if [ -z "$URL" ]; then
+  URL="$(printf '%s' "$RELEASE" |
+    sed -n 's/.*"\(https[^"]*macOS-arm64\.zip\)".*/\1/p' | head -1)"
+  FORMAT=zip
+  ARCHIVE="$WORK/r.zip"
+fi
 [ -n "$URL" ] || fail "could not find the download. See https://github.com/$REPO/releases"
 
 echo "Downloading..."
-curl -fL --progress-bar "$URL" -o "$WORK/r.zip" || fail "the download did not finish. Check your connection and run it again."
-/usr/bin/unzip -q "$WORK/r.zip" -d "$WORK/x" || fail "the download was incomplete. Run it again."
+curl -fL --progress-bar "$URL" -o "$ARCHIVE" || fail "the download did not finish. Check your connection and run it again."
+mkdir -p "$WORK/x"
+# Both of these ship with macOS, so preferring the smaller archive costs
+# nobody a dependency. A truncated download fails here, which is what the
+# message below is about.
+case "$FORMAT" in
+  tar) /usr/bin/tar -xJf "$ARCHIVE" -C "$WORK/x" ;;
+  zip) /usr/bin/unzip -q "$ARCHIVE" -d "$WORK/x" ;;
+esac || fail "the download was incomplete. Run it again."
 
 # Found by what it contains rather than by what it is called, so a release
 # renamed between versions still installs.
