@@ -42,8 +42,8 @@ it is sitting still, it is working. Your browser opens by itself when it is done
 
 Control-click rather than double-click, because macOS blocks unsigned apps opened the normal
 way. [Why that is safe to click through](#why-does-my-mac-warn-me). The command above does not
-show that warning, because macOS only marks what a *browser* downloaded — the file is identical
-either way.
+show that warning, because macOS only marks what a *browser* downloaded — the folder that
+comes out of either one is the same folder.
 
 </details>
 
@@ -100,7 +100,8 @@ new answer.
 
 **Free, private, and quiet.** No account, no subscription, ever. The app itself collects
 nothing about you — no analytics, no usage, no email address, not even a sign-up — and your
-search never leaves your laptop. Installing it is counted, one tally per address per day so I
+shortlist, your notes and your answers never leave your laptop. It does ask the rental sites
+the same search you would have typed into them, and nothing beyond it. Installing it is counted, one tally per address per day so I
 know roughly how many people use this, and the address itself is never stored; once a day it
 asks GitHub whether a newer version exists, sending nothing about you, and one setting turns
 that off. It never acts in your name either: no automated emails to landlords, no forms filled
@@ -118,7 +119,11 @@ day, as long as your computer is awake and logged in. Nothing to remember, nothi
 
 **Check in whenever it suits you.** Best matches at the top, with the reason each one scored
 that way. Star the ones worth a message, pass on the rest — what you have dealt with does not
-come back.
+come back, from that site or any other that lists the same home. A home listed on five sites is
+one row, with a second only when two sites disagree about it (two rents, say). Homes nobody
+starred or noted leave the shortlist three weeks after they arrived; they wait in the archive
+for at least four months, and go once no site has listed them for that long. What you starred,
+noted or passed is never deleted.
 
 ## A closer look
 
@@ -161,7 +166,17 @@ folder on your own computer and never leave it. There is no account, and the app
 reports nothing — no analytics, no usage, no crash reports. Uninstalling keeps your data unless
 you explicitly type `DELETE` when it asks.
 
-Two things do cross the network, and neither is the app watching you use it.
+What does cross the network is the searching itself. Twice a day it opens the rental sites and
+asks them the same question you would have typed in: Craigslist, for instance, is asked for
+places under your rent ceiling with the number of bedrooms you said, exactly as its own search
+box would be. Those sites see your home's internet address and that question, as they would if
+you visited them. Nothing else goes with it — not your name, not your neighborhoods, not your
+notes, not your stars, and nothing that ties one visit to the next. The two optional helpers
+that need an Apify key are the exception worth naming: Facebook and Furnished Finder cannot be
+read directly, so with those switched on your rent range and that key go to Apify, which does
+the reading and hands back the results. Both are off until you turn them on.
+
+Two other things cross it, and neither is the app watching you use it.
 
 **Installing is counted.** The install command above fetches its script from a small server I
 run, which tallies one install per address per day — otherwise I have no idea whether anyone
@@ -175,7 +190,10 @@ Downloading the ZIP from the releases page skips it entirely, and so does
 **Once a day it checks for a new version.** It asks GitHub whether a newer one has been
 released, so that a fix can reach you at all. It sends nothing — no query, no identifier, not
 even which version you are running — and it is the same public page anyone can open in a
-browser. Set `SF_HOUSING_NO_UPDATE_CHECK=1` and it never asks.
+browser. Put `SF_HOUSING_NO_UPDATE_CHECK=1` in front of the install command — or run the
+installer again with it set — and it never asks. It goes into the background service itself, so
+it survives upgrades; exporting it in your shell afterwards does not reach the service, because
+macOS starts that service with its own environment and not yours.
 
 ### Why does my Mac warn me?
 

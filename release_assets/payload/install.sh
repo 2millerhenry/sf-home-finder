@@ -94,13 +94,50 @@ say "4/4  Installing SF Home Finder itself..."
 "$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.6"' ||
   fail "the installed app did not pass its version check. Download the ZIP again."
 
-if [ -f "$DATA_DIR/housing.sqlite3" ] && [ -x "$APP_ROOT/current/bin/python" ]; then
-  /bin/mkdir -p "$APP_ROOT/backups"
-  STAMP="$(/bin/date +%Y%m%d-%H%M%S)"
-  "$APP_ROOT/current/bin/python" -c 'import sqlite3,sys; source=sqlite3.connect(sys.argv[1]); target=sqlite3.connect(sys.argv[2]); source.backup(target); target.close(); source.close()' "$DATA_DIR/housing.sqlite3" "$APP_ROOT/backups/housing-$STAMP.sqlite3"
+# A safety copy of the housing database before anything is replaced, and the
+# backups folder kept to a bounded size -- by sf_housing/backups.py, the same
+# rules both Repairs and the Windows installer run. It used to be a one-line
+# copy with the old runtime's Python: skipped whenever that runtime was the
+# thing broken, which is exactly when people reinstall, and never pruned, so
+# every install added a full-size copy for good.
+#
+# With the new runtime's Python, which has just been proved to work, and while
+# the old app is still running: the copy reads through the write-ahead log, so
+# it is safe beside a running app, and a copy that cannot be taken stops the
+# install here with the old app untouched and still serving.
+if [ -f "$DATA_DIR/housing.sqlite3" ]; then
+  "$STAGE/runtime/bin/python" -I -m sf_housing.backups protect "$APP_ROOT" ||
+    fail "your housing data could not be backed up first, so nothing was changed. The reason is above; free some disk space if it says the disk is full, then run this again."
 fi
+
 if [ "${SF_HOUSING_NO_LAUNCH_AGENT:-0}" != "1" ] && [ -f "$PLIST_PATH" ]; then
   /bin/launchctl bootout "gui/$(id -u)" "$PLIST_PATH" >/dev/null 2>&1 || true
+fi
+
+# Start-up skips re-ranking when the board carries a mark saying this code and
+# this deal already scored it. That mark is maintained by the version that
+# wrote it, and a version that predates it cannot maintain anything: install an
+# older release, let it re-score the board under its own rules, come back, and
+# the mark left by the newer one is still sitting there matching. Retracting it
+# on every install is the only point either version is guaranteed to run, and
+# it costs one re-score per install against one per launch, which is the whole
+# trade.
+#
+# Here, after the old service has been told to stop, rather than before: a
+# running app mid-scan holds the database's write lock, the delete would wait
+# out SQLite's five-second default and fail, and `|| true` would swallow it --
+# silently skipping the one step that makes a downgrade safe. The timeout is
+# for a process still dying when this runs. Written with the new runtime's own
+# Python, which has just been proved to import and has not been moved yet, run
+# isolated so no PYTHONPATH can break it. Never fatal: a mark left in place
+# matters only after a downgrade and back, and failing an install over it would
+# cost more than it saves.
+if [ -f "$DATA_DIR/housing.sqlite3" ]; then
+  "$STAGE/runtime/bin/python" -I -c 'import sqlite3,sys
+connection = sqlite3.connect(sys.argv[1], timeout=30)
+connection.execute("DELETE FROM scoring_state WHERE name = ?", ("rescore_fingerprint",))
+connection.commit()
+connection.close()' "$DATA_DIR/housing.sqlite3" >/dev/null 2>&1 || true
 fi
 
 RUNTIME_TARGET="$RUNTIMES_DIR/$VERSION"

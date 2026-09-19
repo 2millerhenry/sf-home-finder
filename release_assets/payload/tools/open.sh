@@ -33,13 +33,22 @@ if ! health; then
     [ -f "$PLIST_PATH" ] || { printf 'The login service is missing. Run Repair.\n'; exit 1; }
     /bin/launchctl kickstart -k "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
   fi
-  for attempt in $(/usr/bin/seq 1 30); do
+  # The same window the installer waits, and for the same reason: a first
+  # start re-ranks every stored home before it answers anything, which on a
+  # board of 8,583 took 42 seconds. Thirty was short enough that a healthy app
+  # on a full board was declared dead and the reader was sent to Repair.
+  for attempt in $(/usr/bin/seq 1 150); do
     health && break
     /bin/sleep 1
   done
 fi
 
-health || { printf 'The dashboard did not start. Run Repair and check the log in %s/logs.\n' "$APP_ROOT"; exit 1; }
+health || {
+  printf 'It has not answered yet and is probably still starting on a full board.\n'
+  printf '  Wait a minute, then open: %s\n' "$URL"
+  printf '  Still nothing? Double-click Repair SF Home Finder, or read %s/logs.\n' "$APP_ROOT"
+  exit 1
+}
 if [ "${1:-}" != "--no-browser" ] && [ "${SF_HOUSING_NO_BROWSER:-0}" != "1" ]; then
   /usr/bin/open "$URL"
 fi

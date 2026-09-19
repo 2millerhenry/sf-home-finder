@@ -4,9 +4,12 @@ import logging
 import json
 import os
 import queue
+import re
+import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -17,14 +20,19 @@ from .classification import classify_listing
 from .connectors import GMAIL_PROVIDERS, aggregate_gmail_status, connector_state_for_error
 from .coverage import coverage_is_fresh, fetch_count, missing_coverage_targets
 from .database import Repository, utc_now
+from .listing_identity import UNIT_GRAIN, facts_for_listing, same_home
+from .location import split_street_address
 from .filelock import release as release_file_lock, try_acquire as try_acquire_file_lock
 from .freshness import source_is_in_backoff, source_key as watchdog_source_key
 from .models import ListingCandidate, ScanOutcome
 from .preferences import Preferences
+from .rescore_marker import current_fingerprint
 from .scoring import score_listing
 from .sources import (
     MONITOR_HEADERS,
     ListingSource,
+    PartialReadError,
+    ScanTimeUpError,
     SourceError,
     facebook_coordinate_neighborhood,
     visible_sf_area_hint,
@@ -185,6 +193,109 @@ INTERRUPTED_LANE_MESSAGE = (
     "Still reading when this check was stopped, so its homes were not counted "
     "in this check."
 )
+# What a source reads when a check stops for it, when the reason is this
+# computer going to sleep rather than anything the site did.
+SLEPT_MESSAGE = (
+    "This computer went to sleep during the check, so the check stopped here "
+    "rather than carry on for hours. The next check reads it."
+)
+
+# What the check itself reads when that left sources it never read. Filed as
+# interrupted, not completed: the slot it ran for is still owed a check (see
+# ``scheduling.catch_up_if_due``), and a check asked for by hand is not spent.
+SLEPT_SCAN_MESSAGE = (
+    "This computer went to sleep during the check, so it stopped rather than carry on for hours. "
+    "What it read is kept; the sources it had not read are read by a check soon after the computer wakes."
+)
+
+
+def scan_clock() -> Callable[[], float]:
+    """A clock that never goes backwards and keeps counting while the computer sleeps.
+
+    Every budget and ceiling of a scan is spent on it. Python's own
+    ``time.monotonic`` stops while a Mac sleeps (it is mach_absolute_time;
+    Linux's CLOCK_MONOTONIC stops too): it had counted 46.7 of one laptop's
+    92.8 hours since boot. A scan timed by it resumed after the lid opened
+    with most of its four minutes still to spend, and in the Mac's brief
+    background wakes it went on spending them -- one check held on for two
+    hours and seventeen minutes, a single Craigslist read for ninety-nine
+    minutes, and a request "timed out" after 524 seconds against a limit of
+    eight. Linux's CLOCK_BOOTTIME and macOS's CLOCK_MONOTONIC count the sleep;
+    on Windows ``time.monotonic`` already does.
+    """
+    boottime = getattr(time, "CLOCK_BOOTTIME", None)
+    if boottime is not None:
+        return lambda: time.clock_gettime(boottime)
+    if sys.platform == "darwin":
+        return lambda: time.clock_gettime(time.CLOCK_MONOTONIC)
+    return time.monotonic
+
+
+def awake_only_clock() -> Callable[[], float]:
+    """A clock that stops while the computer sleeps: where it falls behind
+    ``scan_clock`` the computer slept, which a check then says instead of
+    blaming a site. ``time.monotonic`` is that clock on macOS and Linux; on
+    Windows it counts sleep too, so the interrupt time Windows keeps without
+    its sleep is read instead (untested here: no Windows machine), and a
+    failure to read it leaves only the telling-apart undone.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            query = ctypes.windll.kernel32.QueryUnbiasedInterruptTime
+
+            def unbiased() -> float:
+                ticks = ctypes.c_ulonglong()
+                if not query(ctypes.byref(ticks)):
+                    raise OSError("QueryUnbiasedInterruptTime failed")
+                return ticks.value / 10_000_000
+
+            unbiased()
+            return unbiased
+        except Exception:
+            pass
+    return time.monotonic
+
+
+# How long any wait on a source or a lane sleeps before looking at the scan's
+# clock again. Python's own timeouts are counted on the clock that stops while
+# the computer sleeps, so a wait of seventy-five seconds begun just before the
+# lid closed could last hours; in slices, a wait notices within a second of
+# waking that its time is up.
+WAIT_SLICE_SECONDS = 1.0
+# How far the scan's clock must run ahead of the awake one before a check says
+# the computer slept. The two tick together while it is awake.
+SLEEP_NOTICE_SECONDS = 5.0
+
+
+@dataclass
+class _FetchLimit:
+    """When one call to a source must stop asking its site for anything.
+
+    Set for the thread the call runs on and read by the scanner's HTTP clients
+    before every request, redirects included (``Scanner._refuse_past_the_limit``),
+    so a source walked away from stops at its next page instead of reading on
+    for as long as its own walk allows. ``tripped`` says a request was refused.
+    """
+
+    end: float
+    tripped: bool = False
+    # Once the time is up: what the source should say about it, and whether
+    # that is time running out (never a failure) or the source stalling.
+    stopped: str | None = None
+    for_time: bool = False
+
+
+# The limit of the call running on this thread, if any.
+_FETCH_LIMIT = threading.local()
+
+
+class _OutOfTime(Exception):
+    """A source the check stopped for time -- its own budget, or the computer
+    sleeping -- rather than one that failed. Recorded as not reached, never as
+    a failure: a failure counts towards pausing the source (freshness), and
+    running out of time or battery is nothing the site did."""
 
 
 def reads_on_its_own_lane(source: ListingSource) -> bool:
@@ -199,6 +310,47 @@ def reads_on_its_own_lane(source: ListingSource) -> bool:
     on both lines at once.
     """
     return getattr(source, "runs_in_own_lane", False) is True
+
+
+def _masked(text: str | None) -> str:
+    """A summary with its numbers taken out, to tell a new sentence from new numbers."""
+    return re.sub(r"\d[\d,.]*", "#", re.sub(r"\s+", " ", str(text or "")).strip()).casefold()
+
+
+def _merged_summary(stored: str | None, fresh: str | None, title: str | None) -> str | None:
+    """The fresh summary unless it is plainly thinner than the one kept.
+
+    A detail page says more than a search card, so a longer stored text
+    survives a short card. Anything else -- the same sentence with new
+    numbers, a rewritten card no shorter than the old one, a stored "summary"
+    that was only the title -- is the site's current word and replaces it.
+    """
+    if not fresh:
+        return stored
+    kept = str(stored or "").strip()
+    if not kept or kept == str(title or "").strip() or _masked(kept) == _masked(fresh):
+        return fresh
+    if len(fresh.strip()) >= len(kept):
+        return fresh
+    return stored
+
+
+def _merged_metadata(stored: dict[str, Any], fresh: dict[str, Any]) -> dict[str, Any]:
+    merged = {**stored, **fresh}
+    kept = stored.get("address")
+    if isinstance(kept, str) and kept.strip() and "address" in fresh:
+        before = split_street_address(kept)
+        after = split_street_address(str(fresh.get("address") or ""))
+        if before is not None and (
+            after is None
+            or (
+                (after.number, after.street) == (before.number, before.street)
+                and before.unit
+                and not after.unit
+            )
+        ):
+            merged["address"] = kept
+    return merged
 
 
 @dataclass
@@ -313,7 +465,8 @@ class Scanner:
         max_scan_seconds: float = 110.0,
         deep_scan_max_seconds: float | None = None,
         scan_allowed: Callable[[str, list[ListingSource] | None], bool] | None = None,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] | None = None,
+        awake_clock: Callable[[], float] | None = None,
     ):
         self.repository = repository
         self.preference_loader = preference_loader
@@ -330,13 +483,19 @@ class Scanner:
         # want, and what the app never does.
         self.scan_allowed = scan_allowed
         # Taken rather than read, so a test can decide what a second costs.
-        # Every budget here is spent in wall-clock seconds, which is right in
-        # production and useless in a test: how much work a machine turns a
-        # second into varies enough that the same scan confirmed sixty homes
-        # here and forty-four on a CI runner. Tests that are about how the
-        # allowance is divided hand in a clock they advance themselves, and
-        # measure the arithmetic instead of the hardware.
-        self._clock = clock
+        # Every budget here is spent in real seconds, the ones that pass while
+        # the computer sleeps too (``scan_clock``), which is right in production
+        # and useless in a test: how much work a machine turns a second into
+        # varies enough that the same scan confirmed sixty homes here and
+        # forty-four on a CI runner. Tests that are about how the allowance is
+        # divided hand in a clock they advance themselves, and measure the
+        # arithmetic instead of the hardware.
+        self._clock = clock or scan_clock()
+        # The seconds this process was awake for. Where it falls behind the
+        # scan's clock the computer slept, which a check then says, rather than
+        # blaming a site; and it bounds every wait too, so a test clock that
+        # never moves cannot leave one waiting for ever.
+        self._awake_clock = awake_clock or awake_only_clock()
         self._scan_lock = threading.Lock()
         self._process_lock_handle = None
         # Set whenever no scan is in flight, so a caller can block on the end of
@@ -504,6 +663,27 @@ class Scanner:
         return watchdog_source_key(source)
 
     @staticmethod
+    def _not_needed(source: ListingSource, preferences: Preferences) -> str | None:
+        """Why this deal has no use for a source, or None to read it as usual.
+
+        The source answers for itself (``not_needed_for``), because only it
+        knows what it lists. An answer that fails costs nothing: that source is
+        read exactly as it would have been before it could be asked.
+        """
+        ask = getattr(source, "not_needed_for", None)
+        if not callable(ask):
+            return None
+        try:
+            reason = ask(preferences)
+        except Exception:
+            LOGGER.warning(
+                "%s could not say whether this deal needs it, so it is read", source.platform,
+                exc_info=True,
+            )
+            return None
+        return str(reason) if reason else None
+
+    @staticmethod
     def _provider(source: ListingSource) -> str:
         return str(
             getattr(source, "last_provider", getattr(source, "provider", source.__class__.__name__))
@@ -608,7 +788,8 @@ class Scanner:
         trigger: str,
         *,
         deadline: float,
-    ) -> list[ListingCandidate]:
+        budget: float,
+    ) -> tuple[list[ListingCandidate], str | None]:
         """Search a source, and stop waiting on it if it stops answering.
 
         A stalled source cannot be interrupted from outside: it is sitting in a
@@ -622,7 +803,12 @@ class Scanner:
         stalled source loses its own results and reports why; nothing else
         loses anything. The thread is a daemon and shares the client, which
         httpx supports, so an abandoned read finishes into a queue nobody is
-        listening to and the interpreter can still exit.
+        listening to and the interpreter can still exit -- and asks its site
+        for nothing more once its time is up (see ``_FetchLimit``).
+
+        Returns the listings, and why the read stopped early if it did: a
+        source that keeps what it has read when a later page is refused keeps
+        it when the time runs out too, and says so.
         """
         def run() -> tuple[str, Any]:
             trigger_search = getattr(source, "search_for_trigger", None)
@@ -634,49 +820,166 @@ class Scanner:
 
         # Never longer than the scan has left, and never so short that a
         # healthy source is cut off by a ceiling meant for a broken one.
+        hard = self._source_ceiling_for(trigger)
         remaining = deadline - self._clock()
-        ceiling = min(self._source_ceiling_for(trigger), max(self.timeout_seconds, remaining))
-        return self._within_ceiling(
-            f"search-{source.platform}",
-            ceiling,
-            run,
-            timed_out=(
-                f"{source.platform} stopped answering partway through and was left after "
-                f"{int(ceiling)} seconds, so the rest of this scan could still run. "
-                "The next check tries it again."
-            ),
-        )
+        ceiling = min(hard, max(self.timeout_seconds, remaining))
+        limit = _FetchLimit(self._clock() + ceiling)
+        try:
+            listings = self._within_ceiling(
+                f"search-{source.platform}",
+                limit,
+                run,
+                timed_out=(
+                    f"{source.platform} stopped answering partway through and was left after "
+                    f"{int(ceiling)} seconds, so the rest of this scan could still run. "
+                    "The next check tries it again."
+                ),
+                # Set by what the scan had left, not by the source's own
+                # ceiling: still reading then is the check running out of time.
+                out_of_time=(
+                    f"Stopped part way to keep this scan within the {int(budget)}-second "
+                    "time limit. The next check reads it again."
+                    if ceiling < hard
+                    else None
+                ),
+            )
+        except PartialReadError as partial:
+            # Cut for time, a partial read is stored and said, not failed; cut
+            # at its own ceiling it is the stall it always was.
+            partial.out_of_time = limit.stopped if limit.for_time else None
+            raise
+        return listings, limit.stopped
 
     def _within_ceiling(
         self,
         label: str,
-        ceiling: float,
+        limit: _FetchLimit,
         run: Callable[[], Any],
         *,
         timed_out: str,
+        out_of_time: str | None,
     ) -> Any:
-        """Run one call the scan is allowed to walk away from.
+        """Run one call the scan is allowed to walk away from, until ``limit.end``.
 
         The thread is a daemon and shares the client, which httpx supports, so
         an abandoned read finishes into a queue nobody is listening to and the
-        interpreter can still exit.
+        interpreter can still exit. The call's limit goes with it: once it is
+        up, the thread's next request is refused before it is sent.
+
+        Waited on in slices against the scan's clock, which counts the time
+        the computer sleeps, never on Python's own timeout, which does not: a
+        wait begun just before the lid closed otherwise went on for hours.
+
+        The time can run out three ways, each said as what it is: the computer
+        slept (``SLEPT_MESSAGE``); the scan had less time left than the source
+        is allowed (``out_of_time``); or, awake and inside its own ceiling, the
+        source stopped answering (``timed_out``) -- the only failure of the
+        three, and the only one that counts towards pausing it.
         """
+        started, awake = self._clock(), self._awake_clock()
+        span = limit.end - started
         outcome: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
         def worker() -> None:
+            _FETCH_LIMIT.current = limit
             try:
                 outcome.put(("value", run()))
             except BaseException as error:  # reported on the scan's thread
                 outcome.put(("error", error))
 
         threading.Thread(target=worker, name=label, daemon=True).start()
-        try:
-            kind, payload = outcome.get(timeout=ceiling)
-        except queue.Empty:
-            raise SourceError(timed_out) from None
+        while True:
+            # The awake clock bounds it as well: it never runs ahead of the
+            # scan's, and a test clock that stands still cannot wait for ever.
+            remaining = min(limit.end - self._clock(), awake + span - self._awake_clock())
+            if remaining <= 0:
+                try:
+                    # Handed back just as the time ran out: it is still an answer.
+                    kind, payload = outcome.get_nowait()
+                    break
+                except queue.Empty:
+                    pass
+                limit.tripped = True
+                raise self._stop(limit, started, awake, timed_out=timed_out, out_of_time=out_of_time) from None
+            try:
+                kind, payload = outcome.get(timeout=min(remaining, WAIT_SLICE_SECONDS))
+                break
+            except queue.Empty:
+                continue
+        if limit.tripped or (kind == "error" and self._slept_since(started, awake)):
+            # A request was refused for time on the way, or the computer slept
+            # while it was out -- a request the sleep cut off (the network gone,
+            # a read reset on waking) is no more the site's doing: whatever
+            # came back came back short, and the reason goes with it.
+            stopped = self._stop(limit, started, awake, timed_out=timed_out, out_of_time=out_of_time)
+            if kind == "error" and not isinstance(payload, PartialReadError):
+                raise stopped from payload
         if kind == "error":
             raise payload
         return payload
+
+    def _stop(
+        self, limit: _FetchLimit, started: float, awake: float, *, timed_out: str, out_of_time: str | None
+    ) -> Exception:
+        """Record on ``limit`` why its call ran out of time, and return that as an error."""
+        stopped = self._why_stopped(started, awake, timed_out=timed_out, out_of_time=out_of_time)
+        limit.for_time = isinstance(stopped, _OutOfTime)
+        limit.stopped = (
+            str(stopped)
+            if limit.for_time
+            else "Stopped at the time one source may take; what it read before then is kept."
+        )
+        return stopped
+
+    def _why_stopped(
+        self, started: float, awake: float, *, timed_out: str, out_of_time: str | None
+    ) -> Exception:
+        """Why a call begun at ``started`` (``awake`` on the awake clock) ran out of time."""
+        if self._slept_since(started, awake):
+            return _OutOfTime(SLEPT_MESSAGE)
+        if out_of_time is not None:
+            return _OutOfTime(out_of_time)
+        return SourceError(timed_out)
+
+    def _slept_since(self, started: float, awake: float) -> bool:
+        """Whether the computer slept since ``started`` (``awake`` on the awake clock)."""
+        return (self._clock() - started) - (self._awake_clock() - awake) > SLEEP_NOTICE_SECONDS
+
+    def _refuse_past_the_limit(self, request: httpx.Request) -> None:
+        """Send nothing for a call whose time is up (see ``_FetchLimit``).
+
+        The request hook of both of a scan's clients, run before every request
+        and every redirect on the thread making it. The check that walked away
+        from a source only stopped waiting; this is what stops the source --
+        an abandoned walk read on for up to eight rent bands of thirty pages.
+        """
+        limit = getattr(_FETCH_LIMIT, "current", None)
+        if limit is not None and self._clock() >= limit.end:
+            limit.tripped = True
+            raise ScanTimeUpError(
+                f"Stopped before asking {request.url.host} again: the time allowed for this source had run out."
+            )
+
+    @contextmanager
+    def _asking_until(self, end: float) -> Iterator[None]:
+        """Hold this thread's own requests to ``end`` while inside, then put back
+        whatever limit it had -- the scan runs on the scheduler's threads, which
+        go on to other jobs."""
+        before = getattr(_FETCH_LIMIT, "current", None)
+        _FETCH_LIMIT.current = _FetchLimit(end)
+        try:
+            yield
+        finally:
+            _FETCH_LIMIT.current = before
+
+    def _join_within(self, thread: threading.Thread, seconds: float) -> None:
+        """``thread.join(seconds)``, with the seconds counted on the scan's clock."""
+        started, awake = self._clock(), self._awake_clock()
+        while thread.is_alive():
+            remaining = min(started + seconds - self._clock(), awake + seconds - self._awake_clock())
+            if remaining <= 0:
+                return
+            thread.join(min(remaining, WAIT_SLICE_SECONDS))
 
     def _enrich_within_ceiling(
         self,
@@ -697,11 +1000,16 @@ class Scanner:
         ceiling = max(1.0, min(DETAIL_HARD_CEILING_SECONDS, limit - self._clock()))
         return self._within_ceiling(
             f"detail-{source.platform}",
-            ceiling,
+            _FetchLimit(self._clock() + ceiling),
             lambda: source.enrich(client, candidate),
             timed_out=(
                 f"{source.platform} stopped answering for {candidate.original_url} and was "
                 f"left after {int(ceiling)} seconds so the scan could go on."
+            ),
+            out_of_time=(
+                "This check's time ran out while the page was read."
+                if ceiling < DETAIL_HARD_CEILING_SECONDS
+                else None
             ),
         )
 
@@ -779,6 +1087,41 @@ class Scanner:
                     "%s could not recheck %s: %s", source.platform, candidate.original_url, exc
                 )
                 continue
+            if refreshed is candidate:
+                # The source handed back the very object it was given, so it
+                # went nowhere: eight sources ship ``enrich`` as ``return
+                # listing``, and Zumper's returns before any request whenever
+                # the rent is already known. Having an ``enrich`` attribute was
+                # read as being able to confirm, so those homes were stamped
+                # confirmed without a single request -- a SpareRoom room no
+                # search had returned since 5 September was printed as "Last
+                # confirmed 17 September" on the author's own board, and a home
+                # taken down in between would have read as current right up to
+                # the email. Nothing was read, so nothing is confirmed; the
+                # home keeps its real date and says nobody has checked it.
+                continue
+            before = facts_for_listing(candidate)
+            after = facts_for_listing(classify_listing(refreshed))
+            moved = not same_home(before, after, strict=False)
+            if moved or (
+                self.repository.is_owned(listing_id)
+                # The same page vouches for nothing once it names an address
+                # the row never had: an alert-email copy has none, and the
+                # page may have been re-let to another flat since.
+                and not same_home(before, after, strict=True, same_url=not after.address_raw)
+            ):
+                # The page now describes a different home, or -- for a home
+                # the user starred or noted -- no longer shows it is the same
+                # one. None of it may be written onto this row: a star on 405
+                # Laguna must not wake up on 409. Only when both are pages
+                # for one flat, and the page names another, is the flat that
+                # was here known to be gone from it; anything less proves
+                # nothing and the row is left exactly as it was.
+                if not moved or before.grain != UNIT_GRAIN or after.grain != UNIT_GRAIN:
+                    continue
+                refreshed = replace(
+                    candidate, metadata={**candidate.metadata, "verified_inactive": True}
+                )
             metadata = dict(refreshed.metadata)
             metadata["last_verified_at"] = utc_now()
             refreshed = replace(classify_listing(refreshed), metadata=metadata)
@@ -794,26 +1137,72 @@ class Scanner:
                 time.sleep(self.detail_delay_seconds)
         return checked
 
+    def _retire_old_listings(self) -> int:
+        """Age out homes past their three weeks, and delete aged-out homes no
+        site has listed for 120 days; never let either cost a scan or an import.
+        Returns how many were aged out."""
+        try:
+            archived, deleted = self.repository.retire_old_listings()
+        except Exception:
+            LOGGER.warning("Could not age out or retire old homes", exc_info=True)
+            # The two share a transaction; a deletion that keeps failing must
+            # not stop the shortlist ageing too.
+            try:
+                return self.repository.archive_stale_listings()
+            except Exception:
+                LOGGER.warning("Could not archive homes past their three weeks", exc_info=True)
+                return 0
+        if deleted:
+            LOGGER.info(
+                "Deleted %s aged-out listing(s) no site has listed for %s days",
+                deleted,
+                self.repository.RETAIN_UNSEEN_DAYS,
+            )
+        return archived
+
     @staticmethod
     def _merge_stored(
-        listing: ListingCandidate, existing: Any, stored_metadata: dict[str, Any]
+        listing: ListingCandidate,
+        existing: Any,
+        stored_metadata: dict[str, Any],
+        *,
+        fresh_first: bool = False,
     ) -> ListingCandidate:
         """Keep richer stored fields when a thin search card would overwrite them.
 
         Detail pages carry more than search cards, so a later scan must not erase
-        what an earlier enrichment learned.
+        what an earlier enrichment learned. Used by the scan and by the browser
+        import alike, so one home is merged one way whichever route it came by.
+
+        Two things the stored copy must not win, though. A summary that is the
+        same sentence with different numbers in it ("1 bed from $2,895" last
+        week, "$2,795" now) is the site saying the numbers changed; keeping the
+        stored one froze the old rent in the text beside the new rent in the
+        price column. And an address the card cannot read, or reads without the
+        unit the stored one had, is a thinner card rather than a different
+        home, so the stored address stays -- it is what says which flat this is.
+
+        ``fresh_first`` is the browser import's rule: a card the user's own
+        browser read is the whole card, so its summary and type win whenever it
+        states them, as they always did on that path.
         """
+        if fresh_first:
+            summary = listing.summary or existing["summary"]
+            listing_type = listing.listing_type or existing["listing_type"]
+        else:
+            summary = _merged_summary(existing["summary"], listing.summary, existing["title"])
+            listing_type = (
+                existing["listing_type"]
+                if existing["listing_type"] not in (None, "", "Room/share")
+                else listing.listing_type
+            )
         return replace(
             listing,
             price=listing.price if listing.price is not None else existing["price"],
             neighborhood=listing.neighborhood or existing["neighborhood"],
-            summary=existing["summary"] or listing.summary,
-            listing_type=(
-                existing["listing_type"]
-                if existing["listing_type"] not in (None, "", "Room/share")
-                else listing.listing_type
-            ),
-            metadata={**stored_metadata, **listing.metadata},
+            summary=summary,
+            listing_type=listing_type,
+            metadata=_merged_metadata(stored_metadata, listing.metadata),
         )
 
     def _begin_progress(self, trigger: str, sources: list[ListingSource] | None = None) -> None:
@@ -1109,34 +1498,30 @@ class Scanner:
             )
             preferences = self.preference_loader()
 
+            settled: list[int] = []
             for listing in listings:
                 seen += 1
                 existing = self.repository.find_listing(
-                    listing.platform, listing.source_id, listing.original_url
+                    listing.platform, listing.source_id, listing.original_url, listing
                 )
                 if existing is not None:
                     stored_metadata = json.loads(existing["metadata_json"] or "{}")
-                    listing = replace(
-                        listing,
-                        price=listing.price if listing.price is not None else existing["price"],
-                        neighborhood=listing.neighborhood or existing["neighborhood"],
-                        summary=listing.summary or existing["summary"],
-                        listing_type=listing.listing_type or existing["listing_type"],
-                        metadata={**stored_metadata, **listing.metadata},
-                    )
+                    listing = self._merge_stored(listing, existing, stored_metadata, fresh_first=True)
                 listing = classify_listing(listing)
                 result = score_listing(listing, preferences)
                 matched_neighborhood = result.details.get("neighborhood", {}).get("match_label")
                 if matched_neighborhood:
                     listing = replace(listing, neighborhood=str(matched_neighborhood))
-                _, created = self.repository.upsert_listing(listing, result)
+                _, created = self.repository.upsert_listing(listing, result, settled=settled)
                 if created:
                     added += 1
                 else:
                     updated += 1
                 self._update_progress(listings_seen=seen, listings_added=added)
+            self._score_what_was_settled(settled, preferences)
 
             self.repository.finish_source_run(source_run_id, "success", seen=seen, added=added)
+            self._retire_old_listings()
             self.repository.finish_scan(
                 run_id,
                 "completed",
@@ -1293,7 +1678,14 @@ class Scanner:
         """Run a scan while the caller holds ``_scan_lock``."""
         run_id: int | None = None
         budget = self._budget_for(trigger)
-        deadline = self._clock() + budget
+        began, began_awake = self._clock(), self._awake_clock()
+        deadline = began + budget
+
+        def asleep() -> bool:
+            """Whether the computer has slept since this scan began: the scan's
+            clock runs on through a sleep, and the awake one does not."""
+            return self._slept_since(began, began_awake)
+
         scan_started_at = utc_now()
         # Each line counts into its own tally, and the lane's is only added in
         # once the lane has been joined, so no count is read while another
@@ -1317,7 +1709,13 @@ class Scanner:
             # for everything twice, so this scan leaves that source alone.
             lane_blocked = bool(laned) and self._lane_thread is not None and self._lane_thread.is_alive()
             limits = httpx.Limits(max_connections=4, max_keepalive_connections=2)
-            with httpx.Client(headers=headers, timeout=timeout, limits=limits, follow_redirects=True) as client:
+            with httpx.Client(
+                headers=headers,
+                timeout=timeout,
+                limits=limits,
+                follow_redirects=True,
+                event_hooks={"request": [self._refuse_past_the_limit]},
+            ) as client, self._asking_until(deadline):
                 self._update_progress(
                     weight_total=sum(weights.values()), weight_done=0.0
                 )
@@ -1338,6 +1736,7 @@ class Scanner:
                         scan_started_at=scan_started_at,
                         active_sources=active_sources,
                         weights=weights,
+                        asleep=asleep,
                     )
                 main_line_deadline = self._main_line_deadline(deadline, lane)
                 try:
@@ -1362,6 +1761,7 @@ class Scanner:
                                 tally=main_tally,
                                 lane=None,
                                 recheck_deadline=main_line_deadline,
+                                asleep=asleep,
                             )
                         except BaseException:
                             # A source that ends the scan is no longer being
@@ -1381,7 +1781,9 @@ class Scanner:
                     # for before the scan adds up its totals or measures anything
                     # else, so its homes and its failures belong to this scan.
                     if lane is not None and not lane.abandoned:
-                        self._join_lane(lane, run_id=run_id, trigger=trigger, deadline=deadline, weights=weights)
+                        self._join_lane(
+                            lane, run_id=run_id, trigger=trigger, deadline=deadline, weights=weights, asleep=asleep
+                        )
 
                 # Ask the disconnected sources how much they are holding. Inside
                 # the client block on purpose: one line further out and the
@@ -1394,8 +1796,18 @@ class Scanner:
                 # bounded by how stale the stored count is.
                 self._measure_missing_coverage(client, preferences)
 
+            # Another passenger: homes first found more than three weeks ago
+            # that nobody starred, noted or decided about leave the page, and
+            # those no site has listed for four months leave the board.
+            self._retire_old_listings()
             total_seen, total_added, total_updated, sources_failed = self._scan_totals(main_tally, lane)
-            completed_status = "completed_with_errors" if sources_failed else "completed"
+            # Read from what the sources recorded rather than from the clocks:
+            # a sleep after the last source (during the sweep, say) left
+            # nothing unread, and owes nothing.
+            slept_through = self.repository.source_runs_say(run_id, SLEPT_MESSAGE)
+            completed_status = (
+                "interrupted" if slept_through else "completed_with_errors" if sources_failed else "completed"
+            )
             self.repository.finish_scan(
                 run_id,
                 completed_status,
@@ -1403,6 +1815,7 @@ class Scanner:
                 added=total_added,
                 updated=total_updated,
                 failed=sources_failed,
+                message=SLEPT_SCAN_MESSAGE if slept_through else None,
             )
             final_status = completed_status
             LOGGER.info(
@@ -1516,7 +1929,7 @@ class Scanner:
         if reach > deadline - elapsed:
             return
         self._hand_bar_to_lane(lane, weights)
-        lane.thread.join(((deadline - elapsed) - reach) / 2)
+        self._join_within(lane.thread, ((deadline - elapsed) - reach) / 2)
 
     def _start_lane(
         self, laned: list[tuple[int, ListingSource]], **scan: Any
@@ -1556,6 +1969,7 @@ class Scanner:
         scan_started_at: str,
         active_sources: list[ListingSource],
         weights: dict[str, float],
+        asleep: Callable[[], bool] = lambda: False,
     ) -> None:
         try:
             # Its own client, with the scan's headers, timeout and limits. On the
@@ -1570,8 +1984,14 @@ class Scanner:
                 timeout=timeout,
                 limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
                 follow_redirects=True,
-            ) as client:
+                event_hooks={"request": [self._refuse_past_the_limit]},
+            ) as client, self._asking_until(deadline):
                 for source_index, source in lane.sources:
+                    if lane.abandoned:
+                        # The scan has already settled every source this lane
+                        # had not finished; starting one now would only write
+                        # into a check that is over.
+                        break
                     failed_before = lane.tally.failed
                     try:
                         self._scan_source(
@@ -1591,6 +2011,7 @@ class Scanner:
                             # The lane's source keeps exactly the time it had at
                             # the front of the queue, which is where it was.
                             recheck_deadline=lambda: deadline,
+                            asleep=asleep,
                         )
                     except Exception as error:
                         self._lane_source_failed(
@@ -1687,12 +2108,13 @@ class Scanner:
         trigger: str,
         deadline: float,
         weights: dict[str, float],
+        asleep: Callable[[], bool] = lambda: False,
     ) -> None:
         """Wait for the lane, for as long as it can legitimately take and no longer."""
         assert lane.thread is not None
         self._hand_bar_to_lane(lane, weights)
         try:
-            lane.thread.join(max(0.0, deadline - self._clock()) + self._lane_join_grace(trigger))
+            self._join_within(lane.thread, max(0.0, deadline - self._clock()) + self._lane_join_grace(trigger))
             if not lane.thread.is_alive():
                 lane.joined = True
                 self.last_lane_seconds = lane.seconds()
@@ -1702,11 +2124,30 @@ class Scanner:
                     self.last_lane_seconds or 0.0,
                 )
                 return
+            if asleep():
+                # Past its time because the computer slept, not because a site
+                # held it: said so, and counted against nobody.
+                LOGGER.warning(
+                    "%s was still reading when the computer slept past this scan's time limit",
+                    ", ".join(source.platform for _, source in lane.sources),
+                )
+                self._abandon_lane(
+                    lane, weights, message=SLEPT_MESSAGE, failed=False, run_id=run_id, not_reached=SLEPT_MESSAGE
+                )
+                return
             LOGGER.error(
                 "%s was still reading past this scan's time limit and was left to finish on its own",
                 ", ".join(source.platform for _, source in lane.sources),
             )
-            self._abandon_lane(lane, weights, message=LEFT_BEHIND_MESSAGE)
+            self._abandon_lane(
+                lane,
+                weights,
+                message=LEFT_BEHIND_MESSAGE,
+                run_id=run_id,
+                not_reached=(
+                    f"Skipped to keep this scan within the {int(self._budget_for(trigger))}-second time limit."
+                ),
+            )
         finally:
             # Nothing is in flight any more: the lane's weight has been added by
             # its own finish, or retired just now.
@@ -1734,30 +2175,63 @@ class Scanner:
                     {"weight_current": waiting, "current_started_monotonic": started}
                 )
 
-    def _abandon_lane(self, lane: _Lane, weights: dict[str, float], *, message: str) -> None:
-        """Stop waiting on a lane, and settle its sources in this scan's record."""
+    def _abandon_lane(
+        self,
+        lane: _Lane,
+        weights: dict[str, float],
+        *,
+        message: str,
+        failed: bool = True,
+        run_id: int | None = None,
+        not_reached: str | None = None,
+    ) -> None:
+        """Stop waiting on a lane, and settle its sources in this scan's record.
+
+        As failures, unless ``failed`` is False: a lane left because the
+        computer slept is not reached, which nothing counts against a site.
+        With ``not_reached``, each source the lane never started is written
+        down as not reached, for that reason: a lane left behind starts
+        nothing more, and without a row of its own a source goes on showing
+        what the check before this one said about it.
+        """
         lane.abandoned = True
         with self._progress_lock:
             # From here on nothing the lane does reaches this scan's numbers, or
             # any later scan's.
             lane.generation = None
         unfinished = [source for _, source in lane.sources if id(source) not in lane.tally.finished_progress]
-        lane.left_behind = len(unfinished)
+        lane.left_behind = len(unfinished) if failed else 0
         for source in unfinished:
             self._finish_source_progress(source, weights.get(source.platform, 0.0))
-        self._add_progress(None, sources_failed=len(unfinished))
+        if failed:
+            self._add_progress(None, sources_failed=len(unfinished))
         row = lane.tally.open_source_run_id
         if row is not None and unfinished:
             try:
                 self.repository.finish_source_run(
                     row,
-                    "error",
+                    "error" if failed else "skipped",
                     message=message,
                     provider=self._provider(unfinished[0]),
                     source_key=self._source_key(unfinished[0]),
                 )
             except Exception:
                 LOGGER.warning("Could not record that the lane was left behind", exc_info=True)
+        if run_id is not None and not_reached:
+            for source in unfinished[1:] if row is not None else unfinished:
+                try:
+                    started = self.repository.begin_source_run(
+                        run_id, source.platform, source.search_url, self._provider(source), self._source_key(source)
+                    )
+                    self.repository.finish_source_run(
+                        started,
+                        "skipped",
+                        message=not_reached,
+                        provider=self._provider(source),
+                        source_key=self._source_key(source),
+                    )
+                except Exception:
+                    LOGGER.warning("Could not record that %s was not reached", source.platform, exc_info=True)
 
     @staticmethod
     def _scan_totals(main_tally: _SourceTally, lane: _Lane | None) -> tuple[int, int, int, int]:
@@ -1799,6 +2273,7 @@ class Scanner:
         tally: _SourceTally,
         lane: _Lane | None,
         recheck_deadline: Callable[[], float],
+        asleep: Callable[[], bool] = lambda: False,
     ) -> None:
         """Read one source from start to finish, on whichever line calls it.
 
@@ -1828,6 +2303,25 @@ class Scanner:
                 source_run_id,
                 source.mode,
                 message=source.manual_reason,
+                source_key=self._source_key(source),
+            )
+            self._finish_source_progress(
+                source, weights.get(source.platform, 0.0), lane=lane, tally=tally
+            )
+            return
+        # A source this deal can make no use of is not asked at all, and its run
+        # says why in its own words. SpareRoom used to decide this inside its
+        # search and answer with an empty list, so every scan filed a successful
+        # check of it that had found nothing -- "working, no matches, a valid
+        # result" -- for a deal with no private room in it, when no request had
+        # left the machine. That also ran the recheck pass behind it.
+        reason = self._not_needed(source, preferences)
+        if reason:
+            self.repository.finish_source_run(
+                source_run_id,
+                "not_needed",
+                message=reason,
+                provider=self._provider(source),
                 source_key=self._source_key(source),
             )
             self._finish_source_progress(
@@ -1884,8 +2378,9 @@ class Scanner:
                 source_run_id,
                 "skipped",
                 message=(
-                    f"Skipped to keep this scan within the {int(budget)}-second "
-                    "time limit."
+                    SLEPT_MESSAGE
+                    if asleep()
+                    else f"Skipped to keep this scan within the {int(budget)}-second time limit."
                 ),
                 source_key=self._source_key(source),
             )
@@ -1897,10 +2392,22 @@ class Scanner:
         source_seen = source_added = source_updated = detail_failures = 0
         source_fetched = source_parsed = source_classified = source_deduplicated = 0
         source_hard_filtered = source_active = source_archived = 0
+        cut_short: PartialReadError | None = None
+        stopped: str | None = None
         try:
-            listings = self._search_within_ceiling(
-                source, client, preferences, trigger, deadline=deadline
-            )
+            try:
+                listings, stopped = self._search_within_ceiling(
+                    source, client, preferences, trigger, deadline=deadline, budget=budget
+                )
+            except PartialReadError as partial:
+                # The read stopped part way, holding homes it had already read.
+                # They are stored below exactly as a finished read's would be,
+                # and the failure is recorded once they are -- unless what
+                # stopped it was the check's time, which is no failure at all.
+                listings, cut_short = partial.listings, partial
+                stopped = getattr(partial, "out_of_time", None)
+                if stopped:
+                    cut_short = None
             source_fetched = len(listings)
             source_parsed = len(listings)
             if trigger == "initial_discovery":
@@ -1923,7 +2430,7 @@ class Scanner:
                 # through a home cannot leave the panel one short of the record.
                 self._add_progress(lane, listings_seen=1)
                 existing = self.repository.find_listing(
-                    listing.platform, listing.source_id, listing.original_url
+                    listing.platform, listing.source_id, listing.original_url, listing
                 )
                 if existing is not None:
                     source_deduplicated += 1
@@ -1995,6 +2502,9 @@ class Scanner:
                         source, client, item["listing"], limit=deadline
                     )
                     item["enriched"] = True
+                except _OutOfTime:
+                    # The check's time is up: no more pages, and no page's fault.
+                    break
                 except Exception as exc:  # one expired/broken detail must not lose the search result
                     detail_failures += 1
                     LOGGER.warning(
@@ -2009,6 +2519,7 @@ class Scanner:
             # Pass 4 is below; pass 3 first, so a home this search
             # did return is up to date before anything is rechecked.
             # Pass 3: classify, score and store every listing.
+            settled: list[int] = []
             for item in prepared:
                 listing = item["listing"]
                 existing = item["existing"]
@@ -2038,7 +2549,7 @@ class Scanner:
                     listing,
                     metadata={**listing.metadata, "last_verified_at": scan_started_at},
                 )
-                _, created = self.repository.upsert_listing(listing, result)
+                _, created = self.repository.upsert_listing(listing, result, settled=settled)
                 if created:
                     source_added += 1
                     tally.added += 1
@@ -2046,6 +2557,14 @@ class Scanner:
                 else:
                     source_updated += 1
                     tally.updated += 1
+            self._score_what_was_settled(settled, preferences)
+            if cut_short is not None:
+                # Everything it read is stored; now it is recorded as the
+                # failure it was, with those counts, so the backoff still hears
+                # a source that keeps turning us away. It skips pass 4: the
+                # homes a search that stopped half way did not return are not
+                # evidence of anything.
+                raise cut_short.cause
             # Pass 4: go and look at the shortlisted homes this
             # search stopped returning. A listing is enriched once
             # and never revisited, so a room verified live on Monday
@@ -2053,8 +2572,9 @@ class Scanner:
             # looking as current as one posted this morning. Absence
             # from one page is not proof, so this checks the page
             # rather than inferring anything from the silence, and
-            # only runs where the search itself succeeded.
-            rechecked = self._recheck_absent(
+            # only runs where the search itself succeeded -- in full: a
+            # read the check's time cut short returned only what it got to.
+            rechecked = 0 if stopped else self._recheck_absent(
                 client,
                 source,
                 preferences,
@@ -2079,6 +2599,8 @@ class Scanner:
             if rechecked:
                 note = f"Rechecked {rechecked} home(s) this search no longer lists."
                 message = f"{message} {note}" if message else note
+            if stopped:
+                message = f"{message} {stopped}" if message else stopped
             self.repository.finish_source_run(
                 source_run_id,
                 "success",
@@ -2145,6 +2667,21 @@ class Scanner:
                 source_seen,
                 source_added,
             )
+        except _OutOfTime as cut:
+            # Out of time -- the check's own, or the computer asleep -- before
+            # the search brought anything back. Not reached, as a source passed
+            # over for time is, and never a failure: failures count towards
+            # pausing a source, and this is nothing the site did.
+            self.repository.finish_source_run(
+                source_run_id,
+                "skipped",
+                seen=source_seen,
+                added=source_added,
+                message=str(cut),
+                provider=self._provider(source),
+                source_key=self._source_key(source),
+            )
+            LOGGER.warning("%s was not read to the end: %s", source.platform, cut)
         except Exception as exc:
             tally.failed += 1
             self._add_progress(lane, sources_failed=1)
@@ -2192,43 +2729,177 @@ class Scanner:
     def rescore_all(self, preferences: Preferences | None = None) -> int:
         active_preferences = preferences or self.preference_loader()
         if not active_preferences.profile_active:
+            # No mark is left: a draft deal has no scores worth vouching for,
+            # and recording one would let the pass owed after it is finished be
+            # skipped.
             return 0
-        candidates = self.repository.all_candidates()
+        # The homes still in play; a home the archive has aged out keeps the
+        # scores it left the shortlist with until it is restored (see
+        # ``Repository.live_candidates`` and ``rescore_home``).
+        candidates = self.repository.live_candidates()
         # One connection for the whole board. A connection per listing costs an
         # fsync on every close, which on 870 homes was half a minute of disk
         # sync while start-up waited on it and the dashboard was unreachable.
+        # Only claim the board when nothing else is writing to it. A scan
+        # already in flight loaded its answers when it started, so it goes on
+        # storing scores from the deal this pass has just replaced -- the board
+        # ends up part new and part old, and a mark covering all of it would
+        # make that permanent by skipping the pass that would have fixed it.
+        # ``None`` clears any existing mark, so the next start scores again.
+        #
+        # The lane is asked about separately because it outlives the lock: the
+        # main line releases the scan lock while the lane is still storing, so
+        # ``is_running`` alone left a window where a deal saved at just the
+        # wrong moment claimed a board the lane was about to write old scores
+        # into.
+        mark = None if self._board_has_another_writer() else current_fingerprint(active_preferences)
         with self.repository.connection() as connection:
-            self._rescore(candidates, active_preferences, connection)
-        LOGGER.info("Rescored %s stored listings after preference update", len(candidates))
-        return len(candidates)
+            scored = self._rescore(candidates, active_preferences, connection, mark=mark)
+        LOGGER.info("Rescored %s stored listings", scored)
+        return scored
 
-    def _rescore(self, candidates, active_preferences, connection) -> None:
-        for listing_id, listing in candidates:
-            visible_area: str | None = None
-            if listing.platform == "Facebook Marketplace":
-                mapped_area = facebook_coordinate_neighborhood(listing.neighborhood)
-                if mapped_area:
-                    listing = replace(listing, neighborhood=mapped_area)
-            elif listing.platform == "Furnished Finder" and not listing.neighborhood:
-                # Backfill only an explicitly written area from cards already
-                # stored locally. Do not request detail pages or guess map pins.
-                visible_area = visible_sf_area_hint(
-                    " ".join(filter(None, [listing.title, listing.summary, listing.listing_type]))
-                )
-                if visible_area:
-                    listing = replace(listing, neighborhood=visible_area)
-            listing = classify_listing(listing)
-            result = score_listing(listing, active_preferences)
-            matched_neighborhood = result.details.get("neighborhood", {}).get("match_label")
-            self.repository.update_score(
-                listing_id,
-                result,
-                neighborhood=(
-                    str(matched_neighborhood)
-                    if matched_neighborhood
-                    else visible_area
-                ),
-                listing=listing,
-                connection=connection,
-            )
+    def rescore_home(self, listing_id: int, preferences: Preferences | None = None) -> int:
+        """Score every copy of one home against the deal in hand. Returns rows scored.
+
+        ``rescore_all`` leaves a home the archive aged out with the scores it
+        had then. Restoring, starring, passing or noting one puts it back in
+        front of the reader, so it is scored first -- through the same pass,
+        so exactly as every other home was. The board's mark is put back as
+        it was: this home now agrees with it, and a mark that was already out
+        of date stays out of date, so the next start still scores the rest.
+        """
+        active_preferences = preferences or self.preference_loader()
+        if not active_preferences.profile_active:
+            return 0
+        candidates = self.repository.home_rows(listing_id)
+        if not candidates:
+            return 0
+        mark = self.repository.scoring_mark()
+        with self.repository.connection() as connection:
+            return self._rescore(candidates, active_preferences, connection, mark=mark)
+
+    def _score_what_was_settled(self, settled: list[int], preferences: Preferences) -> None:
+        """Score the copies a scan's writes brought into a home the user decided about.
+
+        A copy found later arrives starred or passed, and so does an older
+        copy a new card joins to the home (``Repository.upsert_listing``).
+        One the archive had aged out still holds the verdict of the deal it
+        left the shortlist with -- ``rescore_all`` scores only the homes in
+        play -- and as the user's own copy it is the one shown. So it is
+        scored now, against the deal this scan holds, as ``rescore_home``
+        scores a home the user restores.
+        """
+        if not settled or not preferences.profile_active:
+            return
+        candidates = sorted(self.repository.candidates(sorted(set(settled))).items())
+        if not candidates:
+            return
+        mark = self.repository.scoring_mark()
+        with self.repository.connection() as connection:
+            self._rescore(candidates, preferences, connection, mark=mark)
+
+    def _board_has_another_writer(self) -> bool:
+        """Is anything other than this pass still storing listings?
+
+        Three questions, because a writer can be in three places. The main line
+        holds the scan lock, which ``is_running`` reports. Its lane is a
+        separate thread that keeps storing after that lock is released, so a
+        lane alone is a live writer while ``is_running`` is already False. And
+        a scan in another process -- ``python -m sf_housing scan``, or a second
+        server on the same data directory -- holds only the cross-process file
+        lock, which is what that file exists for.
+
+        Anything this cannot establish counts as a writer: the cost is one
+        slower start, and the alternative is claiming a board somebody else
+        may be writing old scores into.
+        """
+        if self.is_running:
+            return True
+        lane = self._lane_thread
+        if lane is not None and lane.is_alive():
+            return True
+        return self._scan_lock_held_elsewhere()
+
+    def _scan_lock_held_elsewhere(self) -> bool:
+        """Does another process hold the cross-process scan lock right now?
+
+        Asked by trying for it without waiting and letting go at once, so a
+        scan that starts a moment later is not turned away. Such a scan loads
+        the deal as it stands then -- already the new one -- so the only writer
+        that matters is one holding the lock at this instant.
+        """
+        lock_path = self.repository.path.parent / "scan.lock"
+        if not lock_path.exists():
+            return False
+        try:
+            handle = lock_path.open("a+", encoding="utf-8")
+        except OSError:
+            return True
+        try:
+            acquired = try_acquire_file_lock(handle)
+        except OSError:
+            return True
+        else:
+            if acquired:
+                release_file_lock(handle)
+            return not acquired
+        finally:
+            handle.close()
+
+    def _rescore(self, candidates, active_preferences, connection, mark: str | None = None) -> int:
+        # Retracted before the first row moves. Listings commit one at a time
+        # -- ``Repository._update_score`` ends with its own commit -- so a pass
+        # is not one transaction, and a kill part way through leaves the board
+        # half rewritten. Whatever mark it carried described the board as it
+        # was, so it must not outlive the first change to it.
+        self.repository.set_scoring_mark(connection, None)
         connection.commit()
+        batch = list(candidates)
+        scored: set[int] = set()
+        while batch:
+            for listing_id, listing in batch:
+                visible_area: str | None = None
+                if listing.platform == "Facebook Marketplace":
+                    mapped_area = facebook_coordinate_neighborhood(listing.neighborhood)
+                    if mapped_area:
+                        listing = replace(listing, neighborhood=mapped_area)
+                elif listing.platform == "Furnished Finder" and not listing.neighborhood:
+                    # Backfill only an explicitly written area from cards already
+                    # stored locally. Do not request detail pages or guess map pins.
+                    visible_area = visible_sf_area_hint(
+                        " ".join(filter(None, [listing.title, listing.summary, listing.listing_type]))
+                    )
+                    if visible_area:
+                        listing = replace(listing, neighborhood=visible_area)
+                listing = classify_listing(listing)
+                result = score_listing(listing, active_preferences)
+                matched_neighborhood = result.details.get("neighborhood", {}).get("match_label")
+                self.repository.update_score(
+                    listing_id,
+                    result,
+                    neighborhood=(
+                        str(matched_neighborhood)
+                        if matched_neighborhood
+                        else visible_area
+                    ),
+                    listing=listing,
+                    connection=connection,
+                    rekey=False,
+                )
+            scored.update(listing_id for listing_id, _ in batch)
+            # Which rows are one home can change with a rescore -- a size read
+            # differently, a whole home told from a room -- so the keys are
+            # recomputed, once, for every row this pass wrote and their twins.
+            # A twin this pass did not score may just have been keyed into a
+            # home it did, where an older deal's score would hold the home down:
+            # it is scored too, and keyed with the rest, until none is left.
+            keyed = self.repository.refresh_identities(
+                connection, among=[listing_id for listing_id, _ in batch]
+            )
+            batch = sorted(self.repository.candidates(sorted(keyed - scored)).items())
+        # And recorded only now, with every listing written. Between the
+        # retraction above and this line the board carries no claim at all,
+        # which is exactly what it deserves while it is being rewritten.
+        self.repository.set_scoring_mark(connection, mark)
+        connection.commit()
+        return len(scored)

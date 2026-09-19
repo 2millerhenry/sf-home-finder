@@ -10,7 +10,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 import logging
 
-from .scanner import DEEP_SWEEP_TRIGGER, Scanner
+from .scanner import DEEP_SWEEP_TRIGGER, SLEPT_SCAN_MESSAGE, Scanner
 
 
 LOGGER = logging.getLogger(__name__)
@@ -29,6 +29,16 @@ SCHEDULE_HOURS = (10, 18)
 # question itself is one SQLite read of recent scans, so asking 96 times a day
 # costs nothing.
 CATCH_UP_INTERVAL_MINUTES = 15
+
+# How late either net may be and still run. APScheduler allows a job one second
+# of lateness by default and silently skips it beyond that, which is the wrong
+# default for a job whose whole purpose is a Mac that was asleep: the wake is
+# exactly when its run time is minutes or hours in the past. The real install's
+# log shows fifty "was missed by 0:12:48" drops of the scan net and twenty-six
+# of the sweep's in sixteen days -- every one of them on the wake it existed to
+# serve. An hour is longer than either net has to survive, and being late costs
+# nothing: each asks the database whether a run is owed before starting one.
+CATCH_UP_MISFIRE_GRACE_SECONDS = 60 * 60
 
 # Named so liveness can tell the two jobs apart. "Next check" means the next
 # real scan; the heartbeat runs every fifteen minutes and is not one, so a
@@ -227,7 +237,11 @@ def schedule_coverage(
 
 
 def _scan_started(scan: dict) -> datetime | None:
-    text = str(scan.get("started_at") or "").strip()
+    return _stamp(scan.get("started_at"))
+
+
+def _stamp(value: object) -> datetime | None:
+    text = str(value or "").strip()
     if not text:
         return None
     try:
@@ -305,6 +319,13 @@ def manual_scans_today(recent_scans: list[dict], now: datetime | None = None) ->
             continue
         if scan.get("status") not in BUDGET_SPENDING_STATUSES:
             continue
+        # Nothing to charge for. A scan run with the wifi off fails every source
+        # in the resolver, so not one request arrives anywhere -- and the person
+        # back on a network was told "You have had your check for today" about a
+        # check that never happened. Absent (an older row, or a caller passing a
+        # bare summary) is not zero: only a counted nought is free.
+        if scan.get("sources_reached") == 0:
+            continue
         timestamp = scan.get("started_at")
         if not timestamp:
             continue
@@ -355,6 +376,23 @@ def next_manual_scan_allowed(now: datetime | None = None) -> datetime:
     return datetime.combine(current.date() + timedelta(days=1), time(0), tzinfo=PACIFIC)
 
 
+# A check the computer slept through is owed again (``SLEPT_SCAN_MESSAGE``),
+# but not in the next moment of darkness: a Mac asleep overnight wakes for a
+# minute now and then, a catch-up begun in one is cut short by the next sleep,
+# and every try asks the same first sites again. One try an hour still finds
+# the morning.
+SLEPT_RETRY_WAIT = timedelta(hours=1)
+
+
+def slept_through_lately(recent_scans: list[dict], now: datetime | None = None) -> bool:
+    """Whether the latest check stopped for sleep less than ``SLEPT_RETRY_WAIT`` ago."""
+    latest = recent_scans[0] if recent_scans else None
+    if not latest or latest.get("status") != "interrupted" or latest.get("message") != SLEPT_SCAN_MESSAGE:
+        return False
+    stopped = _stamp(latest.get("finished_at") or latest.get("started_at"))
+    return stopped is not None and (now or datetime.now(UTC)).astimezone(UTC) - stopped < SLEPT_RETRY_WAIT
+
+
 def catch_up_if_due(scanner: Scanner) -> bool:
     """Run one scan if a scheduled slot went unserved. Returns whether it did.
 
@@ -374,7 +412,8 @@ def catch_up_if_due(scanner: Scanner) -> bool:
             return False
         if not scanner.preference_loader().profile_active:
             return False
-        if not scheduled_scan_due(scanner.repository.recent_scans(20)):
+        recent = scanner.repository.recent_scans(20)
+        if not scheduled_scan_due(recent) or slept_through_lately(recent):
             return False
         started = scanner.start_scan("catch_up")
         if started:
@@ -405,7 +444,7 @@ def sweep_if_due(scanner: Scanner) -> bool:
         recent = scanner.repository.recent_scans(40)
         # A current shortlist beats a complete tail: if an ordinary check is
         # owed, that runs first and this waits for the next heartbeat.
-        if scheduled_scan_due(recent):
+        if scheduled_scan_due(recent) or slept_through_lately(recent):
             return False
         if not deep_sweep_due(recent):
             return False
@@ -463,6 +502,7 @@ def build_scheduler(
         replace_existing=True,
         coalesce=True,
         max_instances=1,
+        misfire_grace_time=CATCH_UP_MISFIRE_GRACE_SECONDS,
     )
     # The same safety net under the sweep. Hourly rather than quarter-hourly:
     # what it is checking changes once a day.
@@ -475,6 +515,7 @@ def build_scheduler(
         replace_existing=True,
         coalesce=True,
         max_instances=1,
+        misfire_grace_time=CATCH_UP_MISFIRE_GRACE_SECONDS,
     )
     if update_check is not None:
         # Six-hourly, though it asks GitHub at most once a day: the job is the

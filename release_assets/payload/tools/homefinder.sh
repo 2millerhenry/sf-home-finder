@@ -11,6 +11,17 @@ PORT="${SF_HOUSING_PORT:-8000}"
 URL="http://127.0.0.1:$PORT/"
 TOOLS="$APP_ROOT/tools"
 LABEL="com.sfhousing.monitor"
+# Where this copy's login service would live. install.sh works it out exactly
+# this way -- defaulting inside the app folder when the install was told to keep
+# off the account's LaunchAgents -- so reading it any other way here would be
+# looking somewhere the install never wrote.
+if [ "${SF_HOUSING_NO_LAUNCH_AGENT:-0}" = "1" ]; then
+  DEFAULT_LAUNCH_AGENTS_DIR="$APP_ROOT/LaunchAgents"
+else
+  DEFAULT_LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+fi
+LAUNCH_AGENTS_DIR="${SF_HOUSING_LAUNCH_AGENTS_DIR:-$DEFAULT_LAUNCH_AGENTS_DIR}"
+PLIST_PATH="$LAUNCH_AGENTS_DIR/$LABEL.plist"
 # The app carries its own Python, so reading a JSON field never depends on what
 # the machine happens to have.
 PY="$APP_ROOT/current/bin/python"
@@ -62,6 +73,39 @@ except Exception: sys.exit(1)
 for key in sys.argv[1].split("."):
     d = d.get(key) if isinstance(d, dict) else None
 print("" if d is None else d)' "$1" 2>/dev/null
+}
+
+# A copy that is being validated, or a second install on the same Mac, has no
+# login service of its own: install.sh skips registering one precisely so a
+# throwaway install cannot reach the real account's. launchd knows one label per
+# account, so anything here that reaches for that label reaches the installation
+# somebody actually uses.
+isolated() {
+  if [ "${SF_HOUSING_NO_LAUNCH_AGENT:-0}" = "1" ]; then
+    return 0
+  fi
+  [ "$LAUNCH_AGENTS_DIR" != "$HOME/Library/LaunchAgents" ]
+}
+
+# Restart the copy this command belongs to, the same way install.sh starts one.
+restart_isolated() {
+  if [ -f "$APP_ROOT/service.pid" ]; then
+    pid="$(/bin/cat "$APP_ROOT/service.pid" 2>/dev/null || true)"
+    # The same guard the uninstaller uses: a truncated or half-written file
+    # must never be handed to kill.
+    case "$pid" in
+      ''|*[!0-9]*) ;;
+      *) /bin/kill "$pid" >/dev/null 2>&1 || true ;;
+    esac
+  fi
+  # open.sh starts nothing while the port still answers, so starting again
+  # before the old process has let go is a restart that quietly did not happen
+  # -- and leaves the old code serving with nothing to say it did.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -n "$(health)" ] || break
+    /bin/sleep 1
+  done
+  "$TOOLS/open.sh" --no-browser
 }
 
 usage() {
@@ -118,6 +162,12 @@ case "${1:-open}" in
     [ -n "$summary" ] && say "  $summary"
     [ "$running" = "True" ] && say "  Checking right now."
     [ -n "$state" ] && [ "$state" != "current" ] && say "  Schedule: $state"
+    # These three lines are each an `&&` chain that reports "there was nothing
+    # to print" as a non-zero status, and the last one is the last thing the
+    # script runs -- so a perfectly healthy app, whose schedule state IS
+    # "current" and so prints no extra line, exited 1 and read as a failure to
+    # anything checking the exit code. Say plainly that reaching here is fine.
+    exit 0
     ;;
 
   check|scan)
@@ -173,7 +223,14 @@ case "${1:-open}" in
 
   restart)
     require_installed
-    if [ -f "$HOME/Library/LaunchAgents/$LABEL.plist" ]; then
+    # Every other part of this reads the copy it was installed beside. Restart
+    # did not: it kickstarted the shared label whatever copy asked, so an
+    # isolated one on 8011 bounced the live app on 8000 while it was serving.
+    if isolated; then
+      [ -x "$TOOLS/open.sh" ] || { err "The tool that starts it is missing from $TOOLS. Try 'homefinder repair'."; exit 1; }
+      say "Restarting the copy in $APP_ROOT."
+      restart_isolated
+    elif [ -f "$PLIST_PATH" ]; then
       /bin/launchctl kickstart -k "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
       say "Restarting. Give it a few seconds, then: homefinder status"
     else
@@ -202,6 +259,15 @@ case "${1:-open}" in
     # top, so nothing here has to know what the newest version is or how to
     # fetch it -- there is one installer, and this is it.
     /bin/bash -c "$INSTALL_LINE"
+    # The installer hands a normal install back to launchd, which starts it on
+    # the new files. An isolated copy has no launchd to be handed to, and the
+    # installer's own open.sh starts nothing while the old process is still
+    # answering -- so the files were upgraded underneath a process that went on
+    # serving the version it started with, and the check below then reported "it
+    # was already the newest version" about an upgrade that had happened.
+    if isolated; then
+      restart_isolated >/dev/null 2>&1 || true
+    fi
     # Saying "done" is not the same as being done. The installer restarts the
     # service, and a restart that quietly did not happen leaves somebody
     # running the very version they just replaced, told it worked. So the

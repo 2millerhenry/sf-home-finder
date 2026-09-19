@@ -10,7 +10,7 @@
 
 <section class="hero detail-hero">
   <div>
-    <p class="eyebrow">{{ listing.platform }}{% if listing.status == 'saved' %} · Starred{% elif listing.status == 'dismissed' %} · Passed{% endif %}</p>
+    <p class="eyebrow">{{ listing.platform }}{% if listing.status == 'saved' %} · Starred{% elif listing.status == 'dismissed' and listing.status_reason == 'aged' %} · Aged out{% elif listing.status == 'dismissed' %} · Passed{% endif %}</p>
     <h1>{{ listing.title }}</h1>
     <p class="subtle">{% if listing.opened_at %}You opened this listing on {{ listing.opened_at|pacific_datetime }}.{% else %}You have not opened this listing yet.{% endif %}</p>
   </div>
@@ -25,34 +25,52 @@
   <h2 id="detail-description">What the listing says</h2>
   {% if listing.summary %}
   <p class="detail-description">{{ listing.summary }}</p>
+  {% if listing.summary_quoted_rent %}
+  {#- The text and the price disagree. Said, rather than left side by side as
+      if they agreed: the text can be older than the price. -#}
+  <p class="detail-note rent-disagrees"><strong>This description quotes {{ listing.summary_quoted_rent }} a month; the listing states ${{ "{:,}".format(listing.price) }}.</strong> One of them is out of date &mdash; ask which is current.</p>
+  {% endif %}
   <p class="detail-note">Collected from {{ listing.platform }}. The source page is the only authority; this copy can be out of date.</p>
   {% else %}
   <p class="unknown">{{ listing.platform }} published no description with this listing.</p>
   {% endif %}
 </section>
 
-{% if corroborations %}
-<section class="detail-panel" aria-labelledby="detail-elsewhere">
-  <h2 id="detail-elsewhere">Also listed elsewhere</h2>
-  <p>{{ corroborations|length }} other source{{ '' if corroborations|length == 1 else 's' }} list{{ 's' if corroborations|length == 1 else '' }} this address, so it is a real building and not one site's stale record.</p>
+{% if elsewhere.copies %}
+<section class="detail-panel" aria-labelledby="detail-copies">
+  <h2 id="detail-copies">This home elsewhere</h2>
+  {#- The same flat on other sites: the same address and unit, or the same
+      building offer at the same size and rent. Starring or passing it here
+      does the same to every one of these. -#}
+  <p>{{ elsewhere.copies|length }} other listing{{ '' if elsewhere.copies|length == 1 else 's' }} of this same home. Starring or passing it applies to all of them.</p>
   <dl class="detail-facts">
-    {% for other in corroborations %}
+    {% for other in elsewhere.copies %}
     <div>
       <dt>{{ other.platform }}</dt>
       <dd>
         {% if other.price is not none %}${{ "{:,}".format(other.price) }}/month{% else %}<span class="unknown">no rent published</span>{% endif %}
-        {%- if other.title and other.title != listing.title %} &middot; {{ other.title }}{% endif %}
-        &middot; <a href="/listings/{{ other.id }}?from={{ return_to|urlencode }}">open</a>
+        {%- if other.verified_inactive %} &middot; says it is no longer listed{% endif %}
+        {%- if other.available_on %} &middot; available {{ other.available_on|compact_move_in_date }}{% endif %}
+        &middot; <a href="/listings/{{ other.id }}?from={{ back_to|urlencode }}">open</a>
+        {%- if other.note %}<br><strong>Your note there:</strong> {{ other.note }}{% endif %}
       </dd>
     </div>
     {% endfor %}
   </dl>
-  {% if listing.price is none %}
-    {%- set quoted = corroborations|selectattr('price')|list %}
-    {%- if quoted %}
-  <p><strong>{{ quoted[0].platform }} publishes a rent for this building and {{ listing.platform }} does not.</strong> Treat ${{ "{:,}".format(quoted[0].price) }} as the figure to check, not as this home's confirmed rent: the two sources may be describing different homes in it.</p>
-    {%- endif %}
-  {% endif %}
+  {%- set quoted = elsewhere.copies|selectattr('price')|map(attribute='price')|list %}
+  {%- if quoted and (listing.price is none or quoted|select('ne', listing.price)|list) %}
+  <p>{% if listing.price is none %}{{ listing.platform }} states no rent for it; the other listing{{ '' if quoted|length == 1 else 's' }} do.{% else %}The sites do not agree on the rent.{% endif %} Ask the landlord which figure is current before you plan around it.</p>
+  {%- endif %}
+</section>
+{% endif %}
+
+{% if elsewhere.building_sources %}
+<section class="detail-panel" aria-labelledby="detail-building">
+  <h2 id="detail-building">Other homes at this address</h2>
+  {#- Sources, not rows, and no rents: another flat in the building says the
+      building is real, and nothing about this flat's rent. -#}
+  {%- set source_count = elsewhere.building_sources|length %}
+  <p>{{ source_count }} other source{{ '' if source_count == 1 else 's' }} ({{ elsewhere.building_sources|join(', ') }}) list{{ 's' if source_count == 1 else '' }} homes at this address, so it is a real building and not one site's stale record. They may be different flats, so their rents say nothing about this one.</p>
 </section>
 {% endif %}
 

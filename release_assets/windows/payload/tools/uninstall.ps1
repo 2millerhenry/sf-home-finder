@@ -10,8 +10,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $TaskName = 'SF Housing Monitor'
 $AppRoot = Join-Path $env:LOCALAPPDATA 'SF Housing Monitor'
-& schtasks.exe /End /TN $TaskName 2>$null | Out-Null
-& schtasks.exe /Delete /TN $TaskName /F 2>$null | Out-Null
+# Each in its own scope with Continue: Windows PowerShell 5.1 turns anything
+# schtasks.exe says on stderr -- "the task does not exist", on a machine where
+# it was never created -- into an error that would end the uninstall here.
+& { $ErrorActionPreference = 'Continue'; & schtasks.exe /End /TN $TaskName 2>$null | Out-Null }
+& { $ErrorActionPreference = 'Continue'; & schtasks.exe /Delete /TN $TaskName /F 2>$null | Out-Null }
 
 # Windows will not delete a file that is open, and the running app holds its
 # own Python library open the whole time it is alive. schtasks /End asks it to
@@ -56,7 +59,11 @@ if ($KeepData) {
   try { $confirmation = Read-Host 'Type DELETE to permanently remove private data, or press Enter to keep it' }
   catch { $confirmation = '' }
 }
-if ($confirmation -eq 'DELETE') {
+# -ceq, not -eq: PowerShell's -eq ignores case, so 'delete' -- the word a
+# person types meaning "yes, uninstall" -- erased the database, the logs and
+# every backup. The macOS script has always compared case-sensitively, and
+# the README promises the data survives anything but an explicit DELETE.
+if ($confirmation -ceq 'DELETE') {
   foreach ($name in @('data', 'logs', 'backups')) { $path = Join-Path $AppRoot $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }
   Write-Host 'Private data was permanently deleted.'
 } else { Write-Host 'Private data was preserved. A future install restores it.' }

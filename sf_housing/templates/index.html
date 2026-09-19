@@ -7,8 +7,11 @@
   'one_bedroom': ('1 bedroom', 'home', 'An entire one-bedroom'),
   'two_bedroom': ('2 bedrooms', 'home', 'Split between 2'),
   'three_bedroom': ('3 bedrooms', 'home', 'Split between 3'),
-  'four_bedroom': ('4 bedrooms', 'home', 'Split between 4')
+  'four_bedroom': ('4 bedrooms', 'home', 'Split between 4'),
+  'other': ('Other homes', 'home', 'Size not stated')
 } %}
+{#- Saved and Passed hold every kind of home, so their noun is the general one. -#}
+{% set result_noun = 'home' if cross_tab else mode_labels[housing_mode][1] %}
 <section class="hero dashboard-hero">
   <div>
     <p class="eyebrow">Twice daily · 10 AM and 6 PM</p>
@@ -19,11 +22,14 @@
       <h1>Passed listings</h1>
       <p class="subtle">Nothing is deleted. Restore anything you want to reconsider.</p>
     {% elif view == 'all' %}
-      <h1>Every listing found</h1>
-      <p class="subtle">The full archive, including low scores and dismissed homes.</p>
+      <h1>The archive</h1>
+      <p class="subtle">Every listing still on file, including low scores, homes you passed, and homes aged out after three weeks on the board. Changing your deal does not rescore an aged-out home until you restore it, and one that has been here four months, with no site listing it all that time, is removed unless you starred, noted or passed it.</p>
     {% elif view == 'near_matches' %}
       <h1>Near matches</h1>
       <p class="subtle">Homes that missed by one thing: a few points short of your cut-off, or a little over your budget. Each row says which. Everything else is in the full archive.</p>
+    {% elif housing_mode == 'other' %}
+      <h1>Other homes worth a look</h1>
+      <p class="subtle">Homes that match your deal but fit none of your tabs, almost always because the listing never says how many bedrooms it has. Check the size before you contact anyone.</p>
     {% else %}
       <h1>{{ mode_labels[housing_mode][0] }} worth a look</h1>
       <p class="subtle">
@@ -67,13 +73,17 @@
 </div>
 {% endif %}
 
+{#- Saved and Passed are the user's own lists and hold every size at once, so
+    size tabs there would only look like they narrowed something. -#}
+{% if not cross_tab %}
 <nav class="housing-tabs" aria-label="Home size">
-  {% for mode in enabled_housing_modes %}
+  {% for mode in enabled_housing_modes + (['other'] if show_other_tab else []) %}
   <a href="/?housing={{ mode }}&amp;view={{ view }}&amp;sort=score" {% if housing_mode == mode %}class="active" aria-current="page"{% endif %}>
     <strong>{{ mode_labels[mode][0] }}</strong><span>{{ mode_labels[mode][2] }}</span>
   </a>
   {% endfor %}
 </nav>
+{% endif %}
 
 {% if liveness and not liveness.ok %}
 <p class="liveness-warning" role="status">
@@ -160,7 +170,7 @@
         of the filter vocabulary, and the day a filter is added the export would
         quietly stop honouring it while still returning plausible homes. -#}
     <button class="compact-button" type="submit" formaction="/listings.csv" formnovalidate
-            data-download-csv>Download {{ listings|length }} as CSV</button>
+            name="page" value="{{ page }}" data-download-csv>Download {{ listings|length }} as CSV</button>
     {% if selected_neighborhood or selected_platform or selected_home_style or selected_unit_type or selected_area_priority %}<a class="clear-filters" href="/?housing={{ housing_mode }}&amp;view={{ view }}&amp;sort={{ sort }}">Clear</a>{% endif %}
   </form>
 </section>
@@ -178,11 +188,16 @@
         {% if view == 'saved' %}Starred listings{% elif view == 'dismissed' %}Passed listings{% elif view == 'near_matches' %}Worth a second look{% elif view == 'all' %}Full archive{% else %}Recommended for you{% endif %}
       </h2>
       <p>
-        {% if view == 'active' and housing_mode != 'room' %}Only confirmed {{ mode_labels[housing_mode][0]|lower }}; large known buildings stay out{% elif view == 'active' %}Showing matches at {{ minimum_score }} or higher{% else %}Your review history is always preserved{% endif %}{% if selected_area_priority == 'dream_strong' %} · Dream and strong target areas only{% elif selected_area_priority == 'secondary' %} · Secondary target areas only{% endif %}
+        {% if view == 'active' and housing_mode == 'other' %}Size not stated by any source{% elif view == 'active' and housing_mode != 'room' %}Only confirmed {{ mode_labels[housing_mode][0]|lower }}; large known buildings stay out{% elif view == 'active' %}Showing matches at {{ minimum_score }} or higher{% else %}Your review history is always preserved{% endif %}{% if selected_area_priority == 'dream_strong' %} · Dream and strong target areas only{% elif selected_area_priority == 'secondary' %} · Secondary target areas only{% endif %}
       </p>
     </div>
-    <span class="result-count">{{ listings|length }} {{ mode_labels[housing_mode][1] }}{% if listings|length != 1 %}s{% endif %}</span>
+    <span class="result-count">{% if pages > 1 %}{{ "{:,}".format(first_on_page) }}&ndash;{{ "{:,}".format(first_on_page + listings|length - 1) }} of {% endif %}{{ "{:,}".format(total_homes) }} {{ result_noun }}{% if total_homes != 1 %}s{% endif %}</span>
   </header>
+  {% if estimated_order %}
+  {#- Said because the rows are no longer in plain score order, and the arrow
+      that would claim they are is gone for the same reason. -#}
+  <p class="order-note">Homes that state no rent are placed by what similar homes nearby rent for. The rent shown is only ever what the listing itself says.</p>
+  {% endif %}
 
   {% if listings %}
   {% if view == 'saved' %}
@@ -199,7 +214,7 @@
     <table class="listing-table">
       <thead>
         <tr>
-          <th scope="col" class="cell-score"{% if sort == 'score' %} aria-sort="descending"{% endif %}><a href="{{ sort_urls.score }}">Score <span aria-hidden="true">{% if sort == 'score' %}↓{% endif %}</span></a></th>
+          <th scope="col" class="cell-score"{% if sort == 'score' and not estimated_order %} aria-sort="descending"{% endif %}><a href="{{ sort_urls.score }}">Score <span aria-hidden="true">{% if sort == 'score' and not estimated_order %}↓{% endif %}</span></a></th>
           <th scope="col" class="cell-quick-open">Contact</th>
           <th scope="col" class="cell-price"{% if sort == 'price' %} aria-sort="ascending"{% endif %}><a href="{{ sort_urls.price }}">{% if housing_mode == 'two_bedroom' %}Total / person{% else %}Price{% endif %} <span aria-hidden="true">{% if sort == 'price' %}↑{% endif %}</span></a></th>
           <th scope="col" class="cell-area">Area</th>
@@ -260,8 +275,13 @@
               <span class="meta-price">{% if listing.price is not none %}${{ "{:,}".format(listing.price) }}/mo{% if housing_mode == 'two_bedroom' and listing.per_person_monthly %}, ${{ "{:,}".format(listing.per_person_monthly) }}/person{% endif %}{% else %}Price unknown{% endif %}</span>
               {% if listing.sublease_months %}<span class="contact-signal">{{ listing.sublease_months }}-mo sublet</span>{% endif %}
               {% if listing.application_url %}<span class="contact-signal">Direct application</span>{% elif listing.direct_lister %}<span class="contact-signal">Direct lister</span>{% endif %}
-              {% if listing.note %}<span class="note-indicator">Note saved</span>{% endif %}
+              {% if listing.note or listing.other_notes %}<span class="note-indicator">Note saved</span>{% endif %}
+              {% if listing.status == 'dismissed' and listing.status_reason == 'aged' %}<span class="aged-indicator" title="On the board more than three weeks with nothing saved or noted, so it was moved off the shortlist. Restore brings it back for good.">Aged out</span>{% endif %}
+              {% if listing.other_platforms %}<span class="copies-indicator">Also on {{ listing.other_platforms|join(', ') }}</span>{% endif %}
             </p>
+            {% for other in listing.other_notes %}
+            <p class="other-note"><strong>Your note on the {{ other.platform }} listing:</strong> {{ other.note }}</p>
+            {% endfor %}
             <details class="compact-row-details">
               <summary>Why this score</summary>
               <div>
@@ -312,7 +332,7 @@
               <form method="post" action="/listings/{{ listing.id }}/status">
                 <input type="hidden" name="return_to" value="{{ return_to }}">
                 <input type="hidden" name="status" value="{% if listing.status == 'dismissed' %}active{% else %}dismissed{% endif %}">
-                <button class="row-action quiet-button" type="submit">{% if listing.status == 'dismissed' %}Restore{% else %}Pass{% endif %}</button>
+                <button class="row-action quiet-button" type="submit"{% if listing.copy_count > 1 %} title="Applies to this home on every site that lists it"{% endif %}>{% if listing.status == 'dismissed' %}Restore{% else %}Pass{% endif %}</button>
               </form>
               <details class="table-note{% if listing.note %} has-note{% endif %}">
                 <summary class="row-action">{% if listing.note %}Edit note{% else %}Note{% endif %}</summary>
@@ -328,10 +348,38 @@
             </div>
           </td>
         </tr>
+        {% if listing.other_copy %}
+        {%- set other = listing.other_copy %}
+        {#- The same home on another site, shown only because it disagrees with
+            the row above: a different rent, a date that row lacks, or a
+            different verdict on whether it is still there. -#}
+        <tr class="listing-copy">
+          <td class="cell-score"><strong>{{ other.score }}</strong>{% if other.eligibility == 'ineligible' %}<small class="ineligible-label">Outside deal</small>{% endif %}</td>
+          <td class="cell-quick-open"><a class="quick-open" href="/listings/{{ other.id }}/open" target="_blank" rel="noopener noreferrer" aria-label="Open this home on {{ other.platform }}" data-mark-opened="/listings/{{ other.id }}/opened">Open <span aria-hidden="true">↗</span></a></td>
+          <td class="cell-price">{% if other.price is not none %}<strong>${{ "{:,}".format(other.price) }}</strong><span>/mo</span>{% else %}<span>Unknown</span>{% endif %}</td>
+          <td class="cell-copy-note" colspan="9">
+            <strong>Same home on {{ other.platform }}</strong>
+            {%- if other.disagreement == 'status' %}{% if other.shown_inactive %} · {{ listing.platform }} says it is no longer listed; {{ other.platform }} still lists it{% elif other.verified_inactive %} · {{ other.platform }} says it is no longer listed{% elif other.eligibility == 'ineligible' and other.blockers %} · {{ other.platform }}'s listing puts it outside your deal: {{ other.blockers[0].reason }}{% elif other.eligibility == 'ineligible' %} · {{ other.platform }}'s listing puts it outside your deal{% else %} · {{ other.platform }}'s listing fits your deal where this one does not{% endif %}
+            {%- elif other.disagreement == 'price' %} · the two sites quote different rents{% if listing.price is not none and other.price is not none %} (${{ "{:,}".format(listing.price) }} and ${{ "{:,}".format(other.price) }}){% endif %}; ask which is current
+            {%- else %}{% if other.published_at and not listing.published_at %} · posted {{ other.published_at|compact_pacific_date }}{% endif %}{% if other.available_on and not listing.available_on %} · available {{ other.available_on|compact_move_in_date }}{% endif %}{% endif %}
+            · <a href="/listings/{{ other.id }}?from={{ return_to|urlencode }}">details</a>
+          </td>
+        </tr>
+        {% endif %}
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% endif %}
+  {% if pages > 1 %}
+  {#- A page at a time: a year of the Archive on one page was 183MB of HTML
+      and twenty seconds before anything could be clicked. The order and the
+      filters carry from page to page. -#}
+  <nav class="pager" aria-label="More {{ result_noun }}s">
+    {% if page_urls.previous %}<a href="{{ page_urls.previous }}" rel="prev">&larr; Previous</a>{% endif %}
+    <span>Page {{ page }} of {{ pages }}</span>
+    {% if page_urls.next %}<a href="{{ page_urls.next }}" rel="next">Next &rarr;</a>{% endif %}
+  </nav>
   {% endif %}
   <script src="{{ url_for('static', path='listing-actions.js') }}?v={{ asset_version() }}" defer></script>
   {% else %}
@@ -435,7 +483,7 @@
         <div>
           <span class="status {{ scan.status }}">{{ scan.status|replace('_', ' ') }}</span>
           <strong>{{ scan.started_at|pacific_datetime }}</strong>
-          <small>{{ scan.listings_seen }} checked · {{ scan.listings_added }} new · {{ scan.sources_failed }} errors</small>
+          <small>{{ scan.listings_seen }} checked · {{ scan.listings_added }} new · {{ scan.sources_failed }} errors{% if scan.sources_skipped %} · {{ scan.sources_skipped }} source{{ '' if scan.sources_skipped == 1 else 's' }} not reached in time{% endif %}</small>
         </div>
         {% endfor %}
       </div>

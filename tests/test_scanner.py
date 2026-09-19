@@ -531,7 +531,12 @@ def test_the_stall_ceiling_never_outlasts_the_scan_itself(
 
     assert elapsed < 15, "the scan's own budget did not bound the wait"
     statuses = {item["platform"]: item for item in repository.latest_source_runs()}
-    assert statuses["Stalled"]["status"] == "error"
+    # Cut by what the scan had left, not by its own seventy-five seconds, it
+    # is a source the check ran out of time for -- not a failure. Two failures
+    # pause a source for six hours, and a site cannot be blamed for a limit
+    # it never reached.
+    assert statuses["Stalled"]["status"] == "skipped"
+    assert "4-second time limit" in statuses["Stalled"]["message"]
 
 
 def test_a_source_with_no_detail_budget_is_not_scored_twice(
@@ -691,7 +696,9 @@ def test_a_source_that_ends_any_way_at_all_stops_holding_up_the_bar(
         weight_total=100.0,
         weight_done=0.0,
         weight_current=25.0,
-        current_started_monotonic=time.monotonic(),
+        # The scanner's own clock: it counts the time the computer sleeps,
+        # and time.monotonic does not, so the two do not share a zero.
+        current_started_monotonic=scanner._clock(),
     )
     assert int(scanner.progress["percent"]) == 0
 
@@ -738,7 +745,7 @@ def test_the_bar_moves_while_a_single_slow_source_is_still_running(
         weight_done=0.0,
         weight_current=40.0,
         # Ten of this source's forty seconds have gone.
-        current_started_monotonic=time.monotonic() - 10.0,
+        current_started_monotonic=scanner._clock() - 10.0,
     )
 
     percent = int(scanner.progress["percent"])
@@ -763,7 +770,7 @@ def test_a_source_running_long_cannot_show_progress_that_has_not_happened(
         weight_done=0.0,
         weight_current=40.0,
         # Three times as long as this source usually takes.
-        current_started_monotonic=time.monotonic() - 120.0,
+        current_started_monotonic=scanner._clock() - 120.0,
     )
 
     percent = int(scanner.progress["percent"])

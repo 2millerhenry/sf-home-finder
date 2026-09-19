@@ -27,6 +27,7 @@ from sf_housing.classification import ROOM, WHOLE_UNIT
 from sf_housing.preferences import Preferences, parse_preferences
 from sf_housing.sources import (
     DEEP_SWEEP_TRIGGER,
+    PartialReadError,
     SourceError,
     ZillowSource,
     default_sources,
@@ -535,47 +536,66 @@ class BandClient:
         self.pages = pages or {}
         self.default = default or FakeResponse(search_page())
         self.requested: list[str] = []
+        self.options: list[dict] = []
 
     def get(self, url, **kwargs):
         self.requested.append(url)
+        self.options.append(kwargs)
         for fragment, response in self.pages.items():
             if fragment in url:
                 return response
         return self.default
 
 
-def band_state(url: str) -> dict:
-    """The query state Zillow is actually being asked for."""
-    from urllib.parse import parse_qs, urlsplit
+def unpaced() -> ZillowSource:
+    """The reader without its second between pages, for tests about what it asks.
 
-    raw = parse_qs(urlsplit(url).query).get("searchQueryState", [""])[0]
-    return json.loads(raw) if raw else {}
+    Pacing has tests of its own below; everywhere else the pause only makes a
+    sweep of fakes take fifteen seconds.
+    """
+    source = ZillowSource()
+    source.PAGE_PAUSE_SECONDS = 0
+    return source
+
+
+BAND_PATH = re.compile(r"/homes/for_rent/San-Francisco,-CA_rb/(\d+)-(\d*)_mp/(\d+)_p/$")
+
+
+def band_asked(url: str) -> tuple[tuple[int | None, int | None], int] | None:
+    """The rent band and page a URL asks Zillow for, or None for any other URL.
+
+    Read off the path the way Zillow reads it: "0-2000" is up to $2,000, and
+    "9000-" has no ceiling.
+    """
+    from urllib.parse import urlsplit
+
+    found = BAND_PATH.search(urlsplit(url).path)
+    if not found:
+        return None
+    low, high, page = found.groups()
+    return (int(low) or None, int(high) if high else None), int(page)
 
 
 def test_a_check_somebody_pressed_reads_one_plain_search(preferences) -> None:
     """Slicing costs several times the requests. A person waiting on a spinner
     is not who should pay for the long tail."""
     client = BandClient()
-    ZillowSource().search_for_trigger(client, preferences, "scheduled")
+    unpaced().search_for_trigger(client, preferences, "scheduled")
 
-    assert all("searchQueryState" not in url for url in client.requested), client.requested[:3]
+    assert all(band_asked(url) is None for url in client.requested), client.requested[:3]
+    assert all(url.startswith(ZillowSource.search_url) for url in client.requested)
 
 
 def test_the_nightly_sweep_asks_every_band(preferences) -> None:
     """One search reaches 984 homes of the 2,565 Zillow states it holds. The
     rest are only reachable by asking narrower questions."""
-    source = ZillowSource()
+    source = unpaced()
     client = BandClient()
     source.search_for_trigger(client, preferences, DEEP_SWEEP_TRIGGER)
 
-    asked = [band_state(url)["filterState"]["mp"] for url in client.requested if "searchQueryState" in url]
-    for low, high in source.PRICE_BANDS:
-        wanted = {}
-        if low is not None:
-            wanted["min"] = low
-        if high is not None:
-            wanted["max"] = high
-        assert wanted in asked, f"band {low}-{high} was never asked for"
+    asked = {band_asked(url)[0] for url in client.requested if band_asked(url)}
+    for band in source.PRICE_BANDS:
+        assert band in asked, f"band {band} was never asked for"
 
 
 def test_every_band_lands_under_the_cap_zillow_enforces() -> None:
@@ -595,33 +615,118 @@ def test_every_band_lands_under_the_cap_zillow_enforces() -> None:
     assert reachable >= 900, "the cap this is measured against moved"
 
 
-def test_a_band_asks_zillow_for_rentals_only(preferences) -> None:
+def test_a_band_asks_zillow_for_rentals_only() -> None:
     """Without it the bands fill with homes for sale, whose prices mean
-    something else entirely and would land in the pool as rents."""
-    state = band_state(ZillowSource()._band_url((2000, 3000), 1))
+    something else entirely and would land in the pool as rents. The path says
+    it: Zillow echoed ``isForRent`` true and every for-sale kind false for a
+    band asked for under /homes/for_rent/."""
+    for band in ZillowSource.PRICE_BANDS:
+        assert ZillowSource()._band_url(band, 1).startswith(
+            "https://www.zillow.com/homes/for_rent/"
+        ), band
 
-    assert state["filterState"]["fr"] == {"value": True}
-    assert state["filterState"]["fsba"] == {"value": False}
 
+def test_a_band_is_asked_for_in_the_one_form_that_both_filters_and_is_allowed() -> None:
+    """Two forms fail, in opposite ways. On the plain search's address,
+    "2500-3500_price/" and "2500-3500_mp/" are accepted and ignored -- 200 and
+    the unfiltered page, 12 of 94 prices inside the band -- which is eight
+    copies of one search that all look right. Zillow's own query state
+    filters, and is ``Disallow: /*?searchQueryState=*`` in its robots.txt: the
+    shape every band of every nightly sweep was sent in. The rent path under
+    /homes/for_rent/ does both jobs, and is spelled the way Zillow read it back
+    on 18 September."""
+    source = ZillowSource()
 
-def test_a_band_is_never_asked_for_as_a_path_filter() -> None:
-    """Zillow accepts "2500-3500_price/" and "2500-3500_mp/" and ignores both,
-    answering 200 with the same unfiltered page -- 12 of 94 prices inside the
-    band asked for. Slicing on those is eight copies of one search that all
-    look right."""
-    url = ZillowSource()._band_url((2500, 3500), 1)
+    for band in source.PRICE_BANDS:
+        url = source._band_url(band, 1)
+        assert "searchQueryState" not in url and "?" not in url, url
+        assert not url.startswith(source.search_url), "path filters are ignored there"
+        assert band_asked(url) == (band, 1), url
 
-    assert "_price/" not in url and "_mp/" not in url
-    assert "searchQueryState=" in url
+    assert source._band_url((None, 2000), 1).endswith("/0-2000_mp/1_p/")
+    assert source._band_url((2000, 2600), 1).endswith("/2000-2600_mp/1_p/")
+    assert source._band_url((9000, None), 1).endswith("/9000-_mp/1_p/")
 
 
 def test_page_two_of_a_band_asks_for_page_two_of_that_band() -> None:
-    """The page number lives inside the query state here, not in the path, so
-    a band that paginated the old way would read its first page nine times."""
+    """The page lives in the path, and so does page one: the bare band path is
+    not among the ones robots.txt allows, and "1_p/" is, so it is asked for as
+    that rather than left off."""
     source = ZillowSource()
 
-    assert "pagination" not in band_state(source._band_url((2000, 3000), 1))
-    assert band_state(source._band_url((2000, 3000), 2))["pagination"] == {"currentPage": 2}
+    assert source._band_url((2000, 3000), 1).endswith("/2000-3000_mp/1_p/")
+    assert source._band_url((2000, 3000), 2).endswith("/2000-3000_mp/2_p/")
+
+
+def robots_rules(text: str) -> list[tuple[bool, str]]:
+    """The rules Zillow gives every crawler: the ``User-agent: *`` group.
+
+    As RFC 9309 groups them -- a run of user-agent lines, then its rules.
+    Returned as (is an allow, path pattern).
+    """
+    rules: list[tuple[bool, str]] = []
+    agents: list[str] = []
+    in_rules = False
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if ":" not in line:
+            continue
+        field, value = (part.strip() for part in line.split(":", 1))
+        field = field.casefold()
+        if field == "user-agent":
+            if in_rules:
+                agents, in_rules = [], False
+            agents.append(value)
+        elif field in {"allow", "disallow"}:
+            in_rules = True
+            if "*" in agents and value:
+                rules.append((field == "allow", value))
+    return rules
+
+
+def robots_allow(rules: list[tuple[bool, str]], url: str) -> bool:
+    """RFC 9309: the longest matching rule decides, and an allow wins a tie."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    target = parts.path + (f"?{parts.query}" if parts.query else "")
+    best: tuple[int, bool] | None = None
+    for allow, pattern in rules:
+        anchored = pattern.endswith("$")
+        body = re.escape(pattern[:-1] if anchored else pattern).replace(r"\*", ".*")
+        if re.match(body + (r"\Z" if anchored else ""), target):
+            if best is None or (len(pattern), allow) > best:
+                best = (len(pattern), allow)
+    return best is None or best[1]
+
+
+def test_every_page_zillow_is_asked_for_is_one_its_robots_txt_allows() -> None:
+    """The nightly sweep sent every one of its bands, every night, in a shape
+    Zillow's robots.txt disallows for all crawlers. Checked here against the
+    file as Zillow published it on 18 September, for every page either read can
+    ask for -- and the old band URL is checked too, so a matcher that allows
+    everything cannot pass this."""
+    rules = robots_rules((FIXTURES / "zillow_robots.txt").read_text(encoding="utf-8"))
+    source = ZillowSource()
+    deepest = max(source.max_pages, source.deep_max_pages)
+
+    asked = [source._page_url(page) for page in range(1, deepest + 1)]
+    asked += [
+        source._band_url(band, page)
+        for band in source.PRICE_BANDS
+        for page in range(1, deepest + 1)
+    ]
+    refused = [url for url in asked if not robots_allow(rules, url)]
+    assert not refused, refused[:3]
+
+    old_band = (
+        "https://www.zillow.com/san-francisco-ca/rentals/?searchQueryState="
+        "%7B%22filterState%22%3A%7B%22mp%22%3A%7B%22max%22%3A2000%7D%7D%7D"
+    )
+    assert not robots_allow(rules, old_band), "the matcher never says no"
+    assert not robots_allow(rules, source.BAND_SEARCH_URL + "2000-2600_mp/"), (
+        "a band path without a page is disallowed, which is why page one is 1_p/"
+    )
 
 
 def test_a_home_in_two_bands_reaches_the_pool_once(preferences) -> None:
@@ -646,13 +751,13 @@ def test_a_band_reads_its_own_pages_even_where_an_earlier_band_overlapped(
     Here every band's first page is identical, which is the worst case: with
     the question asked globally, only the first band ever gets past page one.
     """
-    source = ZillowSource()
+    source = unpaced()
     # The same first page for every band, and a second page of new homes.
-    client = BandClient(pages={"%22currentPage%22%3A2": FakeResponse(renamed(search_page(), "p2"))})
+    client = BandClient(pages={"_mp/2_p/": FakeResponse(renamed(search_page(), "p2"))})
 
     source.search_for_trigger(client, preferences, DEEP_SWEEP_TRIGGER)
 
-    reached_page_two = [url for url in client.requested if "%22currentPage%22%3A2" in url]
+    reached_page_two = [url for url in client.requested if "_mp/2_p/" in url]
     assert len(reached_page_two) == len(source.PRICE_BANDS), (
         "a band stopped at page one because an earlier band had already seen its homes"
     )
@@ -661,8 +766,8 @@ def test_a_band_reads_its_own_pages_even_where_an_earlier_band_overlapped(
 def test_a_refused_band_keeps_the_homes_the_others_found(preferences) -> None:
     """Zillow refuses outright past a search's last page. With bands, raising
     there would throw away the bands still to come as well."""
-    source = ZillowSource()
-    client = BandClient(pages={"%22min%22%3A4000": Refused()})
+    source = unpaced()
+    client = BandClient(pages={"/4000-5500_mp/": Refused()})
 
     listings = source.search_for_trigger(client, preferences, DEEP_SWEEP_TRIGGER)
 
@@ -684,13 +789,110 @@ def test_being_turned_away_is_not_read_as_the_end_of_the_results(preferences) ->
     to serve us at all, and reading it as an ending would collect a little,
     report success, and come back tomorrow to be turned away again -- the
     backoff would never hear about it."""
-    source = ZillowSource()
-    client = BandClient(pages={"%22min%22%3A4000": RateLimited()})
+    source = unpaced()
+    client = BandClient(pages={"/4000-5500_mp/": RateLimited()})
 
-    with pytest.raises(SourceError) as refused:
+    with pytest.raises(PartialReadError) as refused:
         source.search_for_trigger(client, preferences, DEEP_SWEEP_TRIGGER)
 
+    assert isinstance(refused.value, SourceError), "the refusal still reads as a failure"
     assert "403" in str(refused.value)
+    # And it no longer costs what was already read: the bands before it travel
+    # with the failure, and a site that has just said no is not asked again.
+    assert refused.value.listings, "the bands read before the refusal were thrown away"
+    assert "/4000-5500_mp/" in client.requested[-1], "it went on asking after being refused"
+
+
+class Moved:
+    """Zillow sending a band's page somewhere else, as httpx reports it unfollowed."""
+
+    status_code = 301
+    text = ""
+
+    def raise_for_status(self):
+        raise httpx.HTTPStatusError("301", request=None, response=None)
+
+
+def test_a_band_past_its_last_page_is_not_followed_into_another_search(preferences) -> None:
+    """Past a band's last page Zillow redirected to the start of the unfiltered
+    search. Followed, that page was read as the band's next one and one more was
+    asked for: four requests to end each band where one will do, thirty-two of
+    the sixty-nine the real sweep sent on 18 September. A redirect is the end of
+    the band, and it is never followed -- the plain search is read on its own
+    schedule, and a redirect target is not a page anybody checked was
+    allowed."""
+    source = unpaced()
+    client = BandClient(pages={"_mp/2_p/": Moved()})
+
+    listings = source.search_for_trigger(client, preferences, DEEP_SWEEP_TRIGGER)
+
+    assert listings
+    assert len(client.requested) == 2 * len(source.PRICE_BANDS), client.requested
+    assert all(band_asked(url) for url in client.requested)
+    assert all(options.get("follow_redirects") is False for options in client.options)
+
+
+def test_the_plain_search_still_follows_where_zillow_sends_it(preferences) -> None:
+    """Only a band's pages stay put; the plain search is Zillow's own address
+    for San Francisco rentals, and wherever it answers from is where it is."""
+    client = BandClient()
+    unpaced().search_for_trigger(client, preferences, "scheduled")
+
+    assert client.options and all(options.get("follow_redirects") is True for options in client.options)
+
+
+def band_page() -> str:
+    """A real band page, trimmed: Zillow's answer to 2000-2600 on 18 September."""
+    return (FIXTURES / "zillow_band_search.html").read_text(encoding="utf-8")
+
+
+def test_zillow_says_which_band_it_answered_and_that_is_what_is_believed() -> None:
+    """Every page echoes the search it ran, and the echo is the only thing
+    that tells a band from the plain search -- both are a page of San Francisco
+    rentals. Read from the real page, 2000-2600 is the band it answered and no
+    other; a page that echoes nothing is given the benefit of the doubt."""
+    state = ZillowSource._search_state(band_page())
+
+    assert not ZillowSource._band_ignored(state, (2000, 2600))
+    assert ZillowSource._band_ignored(state, (2600, 3200))
+    assert ZillowSource._band_ignored(state, (None, 2000))
+    assert not ZillowSource._band_ignored(ZillowSource._search_state(search_page()), (2600, 3200))
+    assert ZillowSource._rows(state), "the real page's homes are read from the same state"
+
+    # The two open ends, as Zillow echoed them on 18 September for "0-2000_mp"
+    # and "9000-_mp": a floor of 0 is no floor, and a missing ceiling is none.
+    def echoed(low, high):
+        return {"queryState": {"filterState": {"monthlyPayment": {"min": low, "max": high}}}}
+
+    assert not ZillowSource._band_ignored(echoed(0, 2000), (None, 2000))
+    assert not ZillowSource._band_ignored(echoed(9000, None), (9000, None))
+    assert ZillowSource._band_ignored(echoed(9000, 12000), (9000, None))
+
+
+def test_a_band_zillow_did_not_apply_is_not_walked_as_the_plain_search(preferences) -> None:
+    """Path filters on the plain search's address were accepted and ignored,
+    and nothing noticed until the prices were counted. Should the band path go
+    the same way, every band would walk the unfiltered search to the bottom:
+    eight times thirty pages a night, from every install, for one search's
+    homes. The echo says so on the first page, and the band stops there."""
+    unfiltered = band_page().replace(',"monthlyPayment":{"min":2000,"max":2600}', "")
+    assert "monthlyPayment" not in unfiltered
+
+    class EveryPageNew(BandClient):
+        """Zillow ignoring the band: the plain search, a fresh page every time."""
+
+        def get(self, url, **kwargs):
+            super().get(url, **kwargs)
+            page = band_asked(url)[1]
+            return FakeResponse(renamed(unfiltered, f"-{page}"))
+
+    source = unpaced()
+    client = EveryPageNew()
+
+    listings = source.search_for_trigger(client, preferences, DEEP_SWEEP_TRIGGER)
+
+    assert len(client.requested) == len(source.PRICE_BANDS), len(client.requested)
+    assert listings, "what the first pages held is still kept"
 
 
 def test_pages_are_spaced_so_a_sweep_is_not_a_burst(preferences, monkeypatch) -> None:

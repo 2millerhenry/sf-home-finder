@@ -6,6 +6,7 @@ import json
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from .deal_profile import SF_NEIGHBORHOODS
 
@@ -133,6 +134,32 @@ _CITY_BY_GRAMMAR = tuple(
 _WHITESPACE = re.compile(r"\s+")
 
 
+# One question asked before the hundred below it: does this text name any of
+# these cities at all? On a real board of 8,680 homes, 22 of them do -- three
+# in a thousand -- and the other 8,658 were each run past 212 patterns to be
+# told what a single search could have said. The cache underneath helps a
+# second pass over the same board and nothing at all on the first, because the
+# key is each listing's own text: measured over one pass it hit 3%.
+#
+# Built from the labels of both pattern sets rather than from a list of cities
+# kept beside them. An earlier attempt at this drew on
+# _UNAMBIGUOUS_OUTSIDE_SF_CITIES, which is the narrower set _CITY_BY_GRAMMAR
+# needs, and so quietly stopped recognising every city only _CITY_WITH_STATE
+# knows -- "richmond, ca" among them, which then read as San Francisco's own
+# Richmond district. Derived from the patterns it is guarding, it cannot fall
+# behind them: a city added to either set joins this in the same edit.
+_GATE_TERMS = frozenset(
+    label.removesuffix(" (outside SF)").casefold()
+    for label in (
+        [label for _, label in _CITY_WITH_STATE]
+        + [label for _, _, label in _CITY_BY_GRAMMAR]
+    )
+)
+_MENTIONS_ANY_CITY = re.compile(
+    "|".join(re.escape(term) for term in sorted(_GATE_TERMS, key=len, reverse=True))
+)
+
+
 # Keyed on the listing text, which is what makes it worth keeping: scoring the
 # same board against a second deal asks this the same questions about the same
 # strings. It was 45% of a scoring pass -- 227 regex searches per listing, most
@@ -143,6 +170,10 @@ def declared_outside_sf_area_hint(text: str | None) -> str | None:
     """Return a clearly declared city outside San Francisco."""
     normalized = _WHITESPACE.sub(" ", (text or "").casefold()).strip()
     if not normalized:
+        return None
+    # Naming a city is necessary for either loop below to match, so text that
+    # names none cannot match and is answered here.
+    if not _MENTIONS_ANY_CITY.search(normalized):
         return None
     for pattern, label in _CITY_WITH_STATE:
         if pattern.search(normalized):
@@ -320,21 +351,117 @@ def _street_key(street: str) -> str | None:
     return None
 
 
-def parse_street_address(address: str | None) -> tuple[int, str] | None:
-    """Split a written address into its number and the dataset's street key."""
+# The unit itself, where _UNIT_SUFFIX only needs to know where it starts: the
+# label that introduced it and the first token after it ("APT 304", "# 9-842").
+_UNIT_TOKEN = re.compile(
+    r"(#|\b(?:APT|APARTMENT|UNIT|STE|SUITE|RM|ROOM|FL|FLOOR|NO)\b\.?)\s*([A-Z0-9][A-Z0-9-]*)"
+)
+
+
+class StreetAddress(NamedTuple):
+    """A written address resolved against the city's street dataset."""
+
+    number: int
+    street: str
+    # How the address introduced its unit ("APT", "#", "STE"...), or None.
+    unit_label: str | None
+    unit: str | None
+    # The last number of a range ("405-413 Laguna St"), or ``number`` itself.
+    number_to: int = 0
+    # Words follow the unit before the next comma ("unit 1649 Upstairs"): the
+    # token is only the start of a description, not a door number.
+    unit_has_more: bool = False
+
+
+def split_street_address(address: str | None) -> StreetAddress | None:
+    """The number, the dataset's street key, and the unit the address names.
+
+    The same reading as ``parse_street_address``, which is this without the
+    unit: the unit is what tells two flats in one building apart, so identity
+    needs it while the neighbourhood lookup deliberately does not.
+    """
     text = re.sub(r"\s+", " ", str(address or "")).strip().upper()
     if not text:
         return None
+    # Read before the tail goes: "1400 Mission St, Apt 5" names its unit after
+    # the comma the tail pattern cuts at.
+    unit_match = _UNIT_TOKEN.search(text)
     text = _TAIL.sub("", text)
-    text = _UNIT_SUFFIX.sub("", text).strip()
+    # "1451 Sacramento Street - #07": the dash was only there to introduce the
+    # unit, and left behind it hides the street type.
+    text = _UNIT_SUFFIX.sub("", text).strip().rstrip(" -")
     # A range ("1200-1250 Market St") is answered by its first number; a
     # trailing letter ("1200A") is a unit, not part of the number.
-    leading = re.match(r"^(\d{1,5})(?:\s*-\s*\d{1,5})?[A-Z]?\s+(.+)$", text)
+    leading = re.match(r"^(\d{1,5})(?:\s*-\s*(\d{1,5}))?([A-Z])?\s+(.+)$", text)
     if not leading:
         return None
-    number, street = int(leading.group(1)), _normalise_street(leading.group(2))
+    number, street = int(leading.group(1)), _normalise_street(leading.group(4))
     key = _street_key(street)
-    return (number, key) if key else None
+    if not key:
+        return None
+    number_to = int(leading.group(2)) if leading.group(2) and int(leading.group(2)) >= number else number
+    if unit_match:
+        rest = re.split(r"[,(]", unit_match.string[unit_match.end():], maxsplit=1)[0]
+        return StreetAddress(
+            number, key, unit_match.group(1).rstrip("."), unit_match.group(2),
+            number_to, bool(re.search(r"[A-Z0-9]", rest)),
+        )
+    if leading.group(3):
+        return StreetAddress(number, key, None, leading.group(3), number_to)
+    return StreetAddress(number, key, None, None, number_to)
+
+
+def read_unit(text: str | None) -> tuple[str, str] | None:
+    """The label and token of a unit written on its own ("APT 323", "#4C")."""
+    match = _UNIT_TOKEN.search(re.sub(r"\s+", " ", str(text or "")).strip().upper())
+    return (match.group(1).rstrip("."), match.group(2)) if match else None
+
+
+def parse_street_address(address: str | None) -> tuple[int, str] | None:
+    """Split a written address into its number and the dataset's street key."""
+    parsed = split_street_address(address)
+    return (parsed.number, parsed.street) if parsed else None
+
+
+# Labels that name the city rather than any part of it. Scoring treats them as
+# no neighbourhood at all, and the filter and the page leave them out.
+GENERIC_LOCATIONS = {"sf", "san francisco", "city of san francisco", "san francisco, ca"}
+
+
+def _area_fold(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.casefold())
+
+
+_CANONICAL_AREAS = {_area_fold(name): name for name in SF_NEIGHBORHOODS}
+_GENERIC_AREAS = {_area_fold(label) for label in GENERIC_LOCATIONS}
+_STATE_SUFFIX = re.compile(r",?\s*(?:ca|california)\.?$", re.IGNORECASE)
+
+
+def canonical_neighborhood(value: str | None) -> str | None:
+    """One spelling for one area, so one area is one group everywhere.
+
+    Craigslist writes its area labels in lower case and the other sources use
+    the product's own names, so the same neighbourhood was stored as
+    "Tenderloin" 490 times and "tenderloin" 207: two groups in every median,
+    every count and the filter list. A value that names one of the product's
+    neighbourhoods -- ignoring case, punctuation and spacing, and a trailing
+    ", CA" -- becomes that name exactly; a label for the whole city becomes
+    "San Francisco"; anything else is only trimmed. Nothing is ever
+    title-cased: "SoMa" and "NOPA" are already right, and a Craigslist
+    compound like "SOMA / south beach" is not this function's to split.
+    """
+    if value is None:
+        return None
+    text = _WHITESPACE.sub(" ", str(value)).strip()
+    if not text:
+        return text
+    for candidate in (text, _STATE_SUFFIX.sub("", text).strip()):
+        folded = _area_fold(candidate)
+        if folded in _CANONICAL_AREAS:
+            return _CANONICAL_AREAS[folded]
+        if folded in _GENERIC_AREAS:
+            return "San Francisco"
+    return text
 
 
 def sf_area_from_address(address: str | None) -> str | None:

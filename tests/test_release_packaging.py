@@ -420,3 +420,92 @@ def test_every_powershell_script_in_the_windows_release_parses() -> None:
             capture_output=True, text=True,
         )
         assert result.returncode == 0, f"{script.name} does not parse: {result.stdout}"
+
+
+def test_the_update_check_switch_reaches_the_background_service() -> None:
+    """The regression: the README said "set SF_HOUSING_NO_UPDATE_CHECK=1 and it
+    never asks", but the check runs inside a launchd service whose environment
+    is the plist and nothing else, so a shell export could not turn it off. It
+    has to be written into the plist, and kept there when a later upgrade is run
+    without the variable set."""
+    installer = (ROOT / "release_assets" / "payload" / "install.sh").read_text(encoding="utf-8")
+
+    assert "$NO_UPDATE_CHECK_ENTRY" in installer, "the plist does not carry the switch"
+    assert (
+        '<key>SF_HOUSING_NO_UPDATE_CHECK</key><string>1</string>' in installer
+    ), "the switch is not written as a plist entry"
+    assert (
+        'grep -q "SF_HOUSING_NO_UPDATE_CHECK" "$PLIST_PATH"' in installer
+    ), "an upgrade would silently turn the update check back on"
+    # And the README must not promise the route that cannot work.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "in front of the install command" in readme
+
+
+def _stub_release(tmp_path: Path, uv_script: str) -> Path:
+    """A release root the installer will accept, with a stand-in for uv.
+
+    Everything before uv runs is real -- the arch check, the file check and the
+    checksum verification -- so what this exercises is the installer's own
+    handling of a runtime step that fails.
+    """
+    import hashlib
+    import re
+
+    installer = (ROOT / "release_assets" / "payload" / "install.sh").read_text(encoding="utf-8")
+    version = re.search(r'^VERSION="([^"]+)"', installer, re.M).group(1)
+
+    release = tmp_path / "release"
+    payload = release / "payload"
+    (payload / "tools").mkdir(parents=True)
+    shutil.copy(ROOT / "release_assets" / "payload" / "install.sh", payload / "install.sh")
+    for tool in (ROOT / "release_assets" / "payload" / "tools").glob("*.sh"):
+        shutil.copy(tool, payload / "tools" / tool.name)
+    (payload / "uv").write_text(uv_script, encoding="utf-8")
+    (payload / "uv").chmod(0o755)
+    (payload / "requirements.lock").write_text("", encoding="utf-8")
+    (payload / f"sf_home_finder-{version}-py3-none-any.whl").write_bytes(b"")
+
+    lines = []
+    for path in sorted(p for p in payload.rglob("*") if p.is_file()):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        lines.append(f"{digest}  {path.relative_to(payload).as_posix()}")
+    (payload / "checksums.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return release
+
+
+@pytest.mark.skipif(
+    not (ROOT / "release_assets" / "payload" / "install.sh").exists(), reason="no macOS installer"
+)
+def test_a_failed_runtime_download_tells_the_person_what_happened(tmp_path: Path) -> None:
+    """The regression: the install ended in silence when the network dropped.
+
+    The four uv steps are the only ones that need the internet, so they are the
+    ones that routinely fail -- and `uv --quiet` prints nothing at all on a
+    failed download. Under `set -e` alone the script simply stopped, leaving the
+    last progress line on screen, no error, no next step and no app. Somebody on
+    hotel wifi had no way to tell a slow install from a dead one.
+    """
+    silent_failure = "#!/bin/bash\nexit 1\n"
+    release = _stub_release(tmp_path, silent_failure)
+
+    result = subprocess.run(
+        ["/bin/bash", str(release / "payload" / "install.sh"), str(release)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME": str(tmp_path / "home"),
+            "SF_HOUSING_APP_ROOT": str(tmp_path / "app"),
+            "SF_HOUSING_NO_LAUNCH_AGENT": "1",
+            "SF_HOUSING_NO_BROWSER": "1",
+            "SF_HOUSING_PORT": "9987",
+        },
+    )
+
+    assert result.returncode != 0, "a failed install reported success"
+    output = result.stdout + result.stderr
+    assert "Installation stopped" in output, f"the install ended without saying so:\n{output!r}"
+    assert "internet connection" in output, "no cause is named"
+    assert "run this again" in output, "no way forward is offered"
+    assert not (tmp_path / "app" / "current").exists(), "a half-installed app was left behind"

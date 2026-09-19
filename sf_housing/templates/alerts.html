@@ -99,7 +99,10 @@
   <div>
     <h2 id="already-title">{{ no_setup_count_word }} sources already work</h2>
     <p class="already-list">
-      {% for name in no_setup_sources %}{{ source_chip(name) }}{% endfor %}
+      {#- A source that has gone quiet says so beside the claim that it works,
+          rather than only on the Support page nobody opens until something has
+          already gone wrong. -#}
+      {% for name in no_setup_sources %}{{ source_chip(name) }}{% if name in quiet_sources %}<span class="chip-quiet" title="{{ name }} has returned nothing recently. Support says why.">quiet</span>{% endif %}{% endfor %}
     </p>
     {#- The promise is kept on one line on purpose: a test guards the exact
         words, and a line break through the middle of them would slip past it. -#}

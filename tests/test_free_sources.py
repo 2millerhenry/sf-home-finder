@@ -27,6 +27,8 @@ class FakeResponse:
         self._payload = payload
         self.text = text
         self.status = status
+        # What the shared refusal check reads, as a real response carries it.
+        self.status_code = status
 
     def json(self):
         if self._payload is None:

@@ -20,7 +20,7 @@ from .liveness import next_run_label, schedule_health
 from .freshness import evaluate_source_freshness, source_key as freshness_source_key
 from .gmail_alerts import GmailAlertMailbox
 from .preferences import PreferenceError, load_preferences
-from .scanner import Scanner
+from .scanner import SLEPT_SCAN_MESSAGE, Scanner
 from .scheduling import schedule_coverage
 from .settings import Settings, _configured_path
 from .sources import ListingSource
@@ -449,7 +449,9 @@ def _scan_check(repository: Repository, scanner: Scanner, now: datetime) -> Diag
             "Scanning",
             "pass",
             "Last check was interrupted",
-            "The app was stopped before the last check finished. Nothing collected was lost.",
+            SLEPT_SCAN_MESSAGE
+            if latest.get("message") == SLEPT_SCAN_MESSAGE
+            else "The app was stopped before the last check finished. Nothing collected was lost.",
             "Nothing to do. The next check runs on schedule, or use Check for new homes now.",
             owner="App",
             metadata={"status": "interrupted", "scan_id": latest.get("id")},
@@ -564,11 +566,16 @@ def _source_freshness_checks(
         # bury the public-source next action on a fresh install.
         if health.status == "optional":
             continue
+        # A source one check passed over is still current -- anything older has
+        # already become "stale" -- and its own action reads "Nothing to do", so
+        # it is not listed among the things to fix. One the deal has no use for
+        # is not a check that applies at all.
         status = (
             "pass"
-            if health.status in {"working", "working_zero", "waiting_first_alert", "checking"}
+            if health.status
+            in {"working", "working_zero", "waiting_first_alert", "checking", "not_reached"}
             else "not_applicable"
-            if health.status in {"not_run", "manual"}
+            if health.status in {"not_run", "manual", "not_needed"}
             else "attention"
         )
         checks.append(
