@@ -19,7 +19,7 @@ press Return:
 curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
 ```
 
-<sub>*19 MB download · about 2–3 minutes · roughly 155 MB on disk when it is done · no password,
+<sub>*12 MB download · about 2–3 minutes · roughly 155 MB on disk when it is done · no password,
 no admin*</sub>
 
 **Works on** a Mac with Apple Silicon — an M1 or newer — on macOS 15.6 or later, and on
