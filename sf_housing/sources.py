@@ -39,6 +39,40 @@ class SourceError(RuntimeError):
     pass
 
 
+class ScanTimeUpError(SourceError):
+    """The check's time for this source ran out before a request was sent.
+
+    Raised by the scanner's own clients, never by a site. A SourceError so
+    that every source which keeps the pages it has read when a later one is
+    refused keeps them now as well; the scanner records it as the check
+    running out of time, never as the site failing (see Scanner._within_ceiling).
+    """
+
+
+class PartialReadError(SourceError):
+    """A read that stopped part way, carrying the listings it had already read.
+
+    Most paginated sources keep what they have and report success when a later
+    page is refused (the PARTIAL_WALK note): a refusal on page four is one page
+    being rate-limited, and calling the source failed is what kept Redfin dark
+    for nine days. Zillow cannot be read that way. It blocks by address, and the
+    block outlasts six hours, so a refusal part way through has to reach the
+    backoff -- which only ever hears a failure. The two needs pulled against
+    each other and the backoff won: a 503 on page four of Zillow's search on 15
+    September threw away the three pages already read, and a timeout on page
+    five on 12 September threw away four.
+
+    This carries both. The scanner stores ``listings`` exactly as it would a
+    finished read, then records the run as the failure ``cause`` describes, so
+    the homes are kept and repeated refusals still pause the source.
+    """
+
+    def __init__(self, cause: Exception, listings: list[ListingCandidate]):
+        super().__init__(str(cause))
+        self.cause = cause
+        self.listings = listings
+
+
 # These are source-integrity signals, not rent preferences.  A public search
 # card can be live while its detail page has been removed or is part of a
 # repeated malformed-post campaign, so the detail page is the authority before
@@ -99,6 +133,22 @@ def _parse_price(value: str | None, *, require_currency: bool = False) -> int | 
     if not match and not require_currency:
         match = re.search(r"\$?\s*([0-9][0-9,]*)", value)
     return int(match.group(1).replace(",", "")) if match else None
+
+
+def _zumper_source_id(url: str) -> str:
+    """Zumper's own listing id, not the words after it.
+
+    A Zumper listing lives at ``/listings/29225041p/1-bedroom-soma-san-francisco-ca``,
+    and the last segment is the same for every one-bedroom Zumper lists in SoMa.
+    Keyed on that slug, each such listing overwrote the last one stored under it
+    -- 13 of 90 Zumper rows on a real board were keyed this way -- and a starred
+    home could be rewritten into a different flat. The numbered segment before
+    it is the listing's own (``p12936`` on a building page).
+    """
+    parts = [part for part in urlsplit(url).path.split("/") if part]
+    if len(parts) >= 2 and parts[0] in {"listings", "apartment-buildings"} and re.fullmatch(r"p?\d+p?", parts[1]):
+        return parts[1]
+    return _source_id(url)
 
 
 def _source_id(url: str) -> str:
@@ -805,12 +855,19 @@ class AbacusSource:
     detail_budget = 10
     empty_result_message = "Abacus currently reports no available rental properties."
 
+    def not_needed_for(self, preferences: Preferences) -> str | None:
+        """Why this deal has no use for Abacus, or None when it has.
+
+        See SpareRoomSource.not_needed_for, whose mirror image this is. Said
+        here rather than written over ``empty_result_message`` as it was: that
+        was never put back, so once a deal had been rooms-only, Abacus really
+        having nothing to let was reported as a skip.
+        """
+        if set(preferences.deal_profile.enabled_paths) & set(_WHOLE_UNIT_BEDROOMS):
+            return None
+        return "Whole homes are not in Your deal, and Abacus lets nothing else, so it was not asked."
+
     def search(self, client: httpx.Client, preferences: Preferences) -> list[ListingCandidate]:
-        if not set(preferences.deal_profile.enabled_paths).intersection(
-            {"studio", "one_bedroom", "two_bedroom", "three_bedroom", "four_bedroom"}
-        ):
-            self.empty_result_message = "Skipped because entire homes are not enabled in Your deal."
-            return []
         response = client.get(self.search_url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
@@ -1122,13 +1179,15 @@ class ApartmentListSource:
     empty_result_message = "Apartment List published no San Francisco buildings in its structured data."
 
     def search(self, client: httpx.Client, preferences: Preferences) -> list[ListingCandidate]:
-        response = client.get(self.search_url)
-        response.raise_for_status()
-        products = [block for block in _json_ld_blocks(response.text) if "Product" in _schema_types(block)]
+        # Through _require_page, as the paginated sources are, so a refusal is
+        # said as one. Left to raise_for_status a 202 with an empty body parsed
+        # as "no structured building data; its page format may have changed",
+        # sending somebody to a parser that was fine, and a 503 reached the
+        # reader as an HTTPStatusError with a link to MDN.
+        document = _require_page(client.get(self.search_url), self.platform)
+        products = [block for block in _json_ld_blocks(document) if "Product" in _schema_types(block)]
         if not products:
-            raise SourceError(
-                "Apartment List returned no structured building data; its page format may have changed."
-            )
+            raise _read_nothing(self.platform, document, "structured building data")
         listings: list[ListingCandidate] = []
         for product in products:
             name = _clean_text(product.get("name"), 180)
@@ -1191,9 +1250,12 @@ class ApartmentListSource:
 
     def enrich(self, client: httpx.Client, listing: ListingCandidate) -> ListingCandidate:
         """Complete a building from its own page: size, address, date, amenities."""
-        response = client.get(listing.original_url)
-        response.raise_for_status()
-        blocks = _json_ld_blocks(response.text)
+        # A refusal is never read as the building's page. An empty 202 passed
+        # raise_for_status, parsed into a thinner record of this building than
+        # the card it replaced, and the recheck pass then stamped the home
+        # confirmed on the strength of a page that said nothing.
+        document = _require_page(client.get(listing.original_url), self.platform)
+        blocks = _json_ld_blocks(document)
         complexes = [b for b in blocks if "ApartmentComplex" in _schema_types(b)]
         building = complexes[0] if complexes else {}
 
@@ -1308,10 +1370,11 @@ class ZumperSource:
     empty_result_message = "Zumper published no San Francisco results in its structured data."
 
     def search(self, client: httpx.Client, preferences: Preferences) -> list[ListingCandidate]:
-        response = client.get(self.search_url)
-        response.raise_for_status()
+        # A refusal said as one, not as a page whose format changed: see
+        # ApartmentListSource.search.
+        document = _require_page(client.get(self.search_url), self.platform)
         entries: list[dict] = []
-        for block in _json_ld_blocks(response.text):
+        for block in _json_ld_blocks(document):
             if block.get("@type") != "SearchResultsPage":
                 continue
             main = block.get("mainEntity")
@@ -1319,9 +1382,7 @@ class ZumperSource:
                 entries = [e for e in main.get("itemListElement") or [] if isinstance(e, dict)]
             break
         if not entries:
-            raise SourceError(
-                "Zumper returned no structured search results; its page format may have changed."
-            )
+            raise _read_nothing(self.platform, document, "structured search results")
 
         listings: list[ListingCandidate] = []
         for entry in entries:
@@ -1378,7 +1439,7 @@ class ZumperSource:
             listings.append(
                 ListingCandidate(
                     platform=self.platform,
-                    source_id=_source_id(url),
+                    source_id=_zumper_source_id(url),
                     title=name,
                     original_url=url,
                     price=price,
@@ -1395,10 +1456,9 @@ class ZumperSource:
         """Fetch the building page only to recover a rent the search feed omitted."""
         if listing.price:
             return listing
-        response = client.get(listing.original_url)
-        response.raise_for_status()
+        document = _require_page(client.get(listing.original_url), self.platform)
         price = None
-        for block in _json_ld_blocks(response.text):
+        for block in _json_ld_blocks(document):
             price = price or _offer_price(block.get("offers"))
         if price is None:
             return listing
@@ -1570,6 +1630,22 @@ def _pages_for_trigger(source: object, trigger: str) -> int:
     return max(shallow, int(getattr(source, "deep_max_pages", shallow)))
 
 
+# Why a mid-walk refusal is not a failed source (the PARTIAL_WALK note).
+#
+# A paginated source is read page by page, and a refusal on page four is the
+# site rate-limiting one page rather than turning this caller away. Redfin made
+# the cost of getting this wrong measurable: every 202 it ever returned came on
+# page 3, 4 or 7 and never once on page 1, so raising there threw away the three
+# pages of San Francisco homes already in hand, recorded the source as failed,
+# and twice pushed it into a 24-hour backoff -- nine days delivering nothing
+# while its first page answered HTTP 200 throughout.
+#
+# So each walk keeps what it has read and stops, rather than losing it -- after
+# a refusal, and after a later page that times out or drops the connection,
+# which costs the pages in hand just the same. A failure on the *first* page
+# still raises, because a source that really is blocked has to be reported as
+# blocked rather than as a quiet zero.
+
 def _require_page(response: httpx.Response, platform: str) -> str:
     """Return a page of results, or refuse to read a wall as an empty result.
 
@@ -1590,7 +1666,24 @@ def _require_page(response: httpx.Response, platform: str) -> str:
             f"{platform} turned away an unattended request (HTTP {response.status_code}). "
             "It is rate-limiting rather than broken; the next check tries again."
         )
-    response.raise_for_status()
+    # A 5xx is the site being unwell, and it belongs in the same sentence rather
+    # than in an HTTPStatusError. Two things went wrong when it did not: the
+    # walk guards below do not catch an HTTPStatusError, so a 502 on page four
+    # threw away the three pages already read, and the reader was shown
+    # "HTTPStatusError: Server error '502 Bad Gateway' ... https://developer.mozilla.org/..."
+    # as the reason their housing search had missed a source.
+    if response.status_code >= 500:
+        raise SourceError(
+            f"{platform} answered HTTP {response.status_code}, which is the site having "
+            "trouble rather than a page of results; the next check tries again."
+        )
+    # Any other 4xx in words too: httpx's own text for it is a URL and an MDN
+    # link, and after a page of homes it ends the walk like any refusal.
+    if response.status_code >= 400:
+        raise SourceError(
+            f"{platform} answered HTTP {response.status_code} rather than a page of results; "
+            "the next check tries again."
+        )
     if response.status_code != 200:
         raise SourceError(
             f"{platform} answered HTTP {response.status_code} rather than a page of results, "
@@ -1737,9 +1830,15 @@ class RedfinSource:
         read_a_card = False
 
         for page in range(1, pages + 1):
-            document = _require_page(
-                client.get(self._page_url(floor, page), headers=_BROWSER_HEADERS), self.platform
-            )
+            # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
+            try:
+                document = _require_page(
+                    client.get(self._page_url(floor, page), headers=_BROWSER_HEADERS), self.platform
+                )
+            except (SourceError, httpx.TransportError):
+                if read_a_card:
+                    break
+                raise
             cards = self._cards(document)
             if not cards:
                 break
@@ -2077,9 +2176,15 @@ class RentComSource:
         read_a_card = False
 
         for page in range(1, self.max_pages + 1):
-            document = _require_page(
-                client.get(self._page_url(floor, page), headers=_BROWSER_HEADERS), self.platform
-            )
+            # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
+            try:
+                document = _require_page(
+                    client.get(self._page_url(floor, page), headers=_BROWSER_HEADERS), self.platform
+                )
+            except (SourceError, httpx.TransportError):
+                if read_a_card:
+                    break
+                raise
             data = self._payload(document)
             # Past the last real page Rent.com serves page one again while its
             # own payload keeps saying "1". Believing the page would re-read the
@@ -2370,9 +2475,15 @@ class ApartmentGuideSource:
         document = ""
 
         for page in range(1, self.max_pages + 1):
-            document = _require_page(
-                client.get(self._page_url(page), headers=_BROWSER_HEADERS), self.platform
-            )
+            # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
+            try:
+                document = _require_page(
+                    client.get(self._page_url(page), headers=_BROWSER_HEADERS), self.platform
+                )
+            except (SourceError, httpx.TransportError):
+                if read_a_card:
+                    break
+                raise
             search = self._payload(document)
             buildings = [item for item in (search.get("listings") or []) if isinstance(item, dict)]
             if not buildings:
@@ -2674,9 +2785,15 @@ class TruliaSource:
         document = ""
 
         for page in range(1, pages + 1):
-            document = _require_page(
-                client.get(self._page_url(page), headers=_BROWSER_HEADERS), self.platform
-            )
+            # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
+            try:
+                document = _require_page(
+                    client.get(self._page_url(page), headers=_BROWSER_HEADERS), self.platform
+                )
+            except (SourceError, httpx.TransportError):
+                if read_a_card:
+                    break
+                raise
             homes = self._homes(document)
             if not homes:
                 break
@@ -2903,9 +3020,15 @@ class MovotoSource:
         document = ""
 
         for page in range(1, self.max_pages + 1):
-            document = _require_page(
-                client.get(self._page_url(page), headers=_BROWSER_HEADERS), self.platform
-            )
+            # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
+            try:
+                document = _require_page(
+                    client.get(self._page_url(page), headers=_BROWSER_HEADERS), self.platform
+                )
+            except (SourceError, httpx.TransportError):
+                if read_a_card:
+                    break
+                raise
             homes = self._listings(document)
             if not homes:
                 break
@@ -3052,9 +3175,11 @@ class ZillowSource:
     Zillow was a setup source here for as long as this app has existed: connect
     an inbox, save a search on Zillow, wait for it to email you. It had brought
     in nothing. The page itself turns out to answer an ordinary request --
-    including one that identifies itself honestly, which is rarer here than the
-    browser string most of these need -- and to carry its results in the page
-    rather than behind an API call.
+    including, when this was written, one that identified itself honestly --
+    and to carry its results in the page rather than behind an API call. It is
+    read with the browser string in ``_BROWSER_HEADERS`` all the same, and
+    docs/sources.md says so rather than describing the honest request it once
+    answered.
 
     They sit under ``searchPageState.cat1.searchResults.listResults``, 41 to a
     page against a stated 2,568, in two shapes that have to be read differently:
@@ -3111,6 +3236,11 @@ class ZillowSource:
     # so nothing is missed; the nightly sweep is exempt and still reads deeply.
     min_seconds_between_reads = 900
 
+    # What "there is no such page" looks like once a search has produced
+    # homes. The plain search answers 400 past its last page; 404 and 410 say
+    # the same thing in other words. None of them is Zillow declining to serve.
+    END_OF_RESULTS = frozenset({400, 404, 410})
+
     FOR_RENT = "FOR_RENT"
 
     # Rent bands, measured against live Zillow rather than guessed. The cap is
@@ -3137,58 +3267,86 @@ class ZillowSource:
         (9000, None),
     )
 
-    def _band_url(self, band: tuple[int | None, int | None], page: int) -> str:
-        """One rent band's search, written as Zillow's own query state.
+    # Where the rent bands are asked for: Zillow's older search address, whose
+    # paginated form is one its robots.txt names as allowed. See _band_url.
+    BAND_SEARCH_URL = "https://www.zillow.com/homes/for_rent/San-Francisco,-CA_rb/"
 
-        The path forms that look like filters -- ``2500-3500_price/`` and
-        ``2500-3500_mp/`` -- are accepted and then ignored: both answer 200
-        with the same unfiltered page, 12 of 94 prices inside the band asked
-        for. Slicing on those would have produced eight copies of one search,
-        every one of them looking right. Redfin's page URL carries the same
-        warning, learned the same way.
+    def _band_url(self, band: tuple[int | None, int | None], page: int) -> str:
+        """One rent band's search, in a form Zillow's robots.txt allows.
+
+        The bands used to be asked for as Zillow's own query state,
+        ``?searchQueryState={...}``, and ``Disallow: /*?searchQueryState=*``
+        sits in the rules Zillow publishes for every crawler. Nothing else
+        filtered: on the address the plain search uses, the path forms that
+        look like filters -- ``2500-3500_price/`` and ``2500-3500_mp/`` -- are
+        accepted and then ignored, answering 200 with the same unfiltered page,
+        12 of 94 prices inside the band asked for.
+
+        Under ``/homes/for_rent/`` the same rent path is read, and a path there
+        ending ``_p/`` is on the allowed list (``Allow: /homes/for_rent/*_p/$``,
+        which outranks ``Disallow: /homes/`` by being the longer match). Checked
+        on 18 September with one request per shape this writes -- 2000-2600,
+        9000 and up, and 0-2000 -- each answered 200 with no redirect, the page
+        Zillow's parser here already reads, rentals only, Zillow's own echo of
+        the search reading the band that was asked for (``"monthlyPayment":
+        {"min": 2000, "max": 2600}``), every rent inside it, the page number
+        asked for, and the same depth -- 3, 4 and 2 pages -- that the query-state
+        form had served the night before. Page one is asked for as ``1_p/``
+        because the bare path is not on the allowed list.
+
+        The bedroom pages robots.txt also allows (``/homes/apartments-2-
+        bedrooms/...``) looked like another way to slice and are not: Zillow
+        reads them as featured apartment communities only, four pages deep.
         """
-        money: dict[str, int] = {}
         low, high = band
-        if low is not None:
-            money["min"] = low
-        if high is not None:
-            money["max"] = high
-        state: dict[str, Any] = {
-            "filterState": {
-                "mp": money,
-                # Rentals only. Without these the bands fill with homes for
-                # sale, whose prices mean something else entirely.
-                "fr": {"value": True},
-                "fsba": {"value": False},
-                "fsbo": {"value": False},
-                "nc": {"value": False},
-                "cmsn": {"value": False},
-                "auc": {"value": False},
-                "fore": {"value": False},
-            },
-            "isListVisible": True,
-        }
-        if page > 1:
-            state["pagination"] = {"currentPage": page}
-        return f"{self.search_url}?searchQueryState={quote(json.dumps(state, separators=(',', ':')))}"
+        rent = f"{low or 0}-{'' if high is None else high}_mp"
+        return f"{self.BAND_SEARCH_URL}{rent}/{page}_p/"
 
     def _page_url(self, page: int) -> str:
         return self.search_url if page == 1 else f"{self.search_url}{page}_p/"
 
     @staticmethod
-    def _results(document: str) -> list[dict]:
-        """The rentals on a Zillow search page, or nothing."""
+    def _search_state(document: str) -> dict:
+        """What a Zillow search page says about itself, or nothing."""
         match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', document, re.S)
         if not match:
-            return []
+            return {}
         try:
             parsed = json.loads(match.group(1))
         except (ValueError, json.JSONDecodeError):
-            return []
-        found = _nested_mapping(
-            parsed, "props", "pageProps", "searchPageState", "cat1", "searchResults"
-        ).get("listResults")
+            return {}
+        return _nested_mapping(parsed, "props", "pageProps", "searchPageState")
+
+    @staticmethod
+    def _rows(state: dict) -> list[dict]:
+        found = _nested_mapping(state, "cat1", "searchResults").get("listResults")
         return [row for row in found or [] if isinstance(row, dict)]
+
+    @classmethod
+    def _results(cls, document: str) -> list[dict]:
+        """The rentals on a Zillow search page, or nothing."""
+        return cls._rows(cls._search_state(document))
+
+    @staticmethod
+    def _band_ignored(state: dict, band: tuple[int | None, int | None]) -> bool:
+        """Whether Zillow says it ran some search other than this rent band.
+
+        Every page echoes the search it answered. That echo is the only thing
+        that can tell a band from the unfiltered search, because both look like
+        a page of San Francisco rentals -- which is how the path filters on the
+        plain search address went unnoticed until the prices were counted. A
+        band Zillow stops reading would otherwise be walked to the bottom eight
+        times a night, eight copies of the plain search. A page that echoes
+        nothing is read as before.
+        """
+        filters = _nested_mapping(state, "queryState", "filterState")
+        if not filters:
+            return False
+        served = filters.get("monthlyPayment") or filters.get("mp")
+        if not isinstance(served, dict):
+            return True
+        low, high = band
+        return (served.get("min") or 0, served.get("max")) != (low or 0, high)
 
     def search_for_trigger(
         self, client: httpx.Client, preferences: Preferences, trigger: str
@@ -3232,20 +3390,45 @@ class ZillowSource:
                 if requested:
                     time.sleep(self.PAGE_PAUSE_SECONDS)
                 requested += 1
-                response = client.get(url, headers=_BROWSER_HEADERS)
-                # Past its last page Zillow answers 400 rather than serving an
-                # empty one. Once cards have been read that is the end of this
-                # search, not the loss of it -- raising would throw away every
-                # home already collected, and with bands the bands still to
-                # come. Deliberately only 400: a 403 is Zillow turning us away
-                # rather than running out of homes, and reading it as an ending
-                # would collect a little, report success, and come back
-                # tomorrow to be turned away again. That one is left to
-                # _require_page, which names it and lets the backoff hear it.
-                if read_a_card and response.status_code == 400:
-                    break
-                document = _require_page(response, self.platform)
-                results = self._results(document)
+                try:
+                    # A band's page is never followed anywhere. Past a band's
+                    # last page Zillow redirected the query-state form to the
+                    # start of the unfiltered search, and following it counted
+                    # that page as the band's next one and then asked for
+                    # another: four requests at the end of every band, thirty-two
+                    # of the sixty-nine the sweep sent on 18 September, for homes
+                    # the plain search already reads. The path form answers the
+                    # same way -- run live on 18 September, every band ended in
+                    # one 301 -- so a redirect is the end of the band, as is
+                    # anything below that says "no such page".
+                    response = client.get(
+                        url, headers=_BROWSER_HEADERS, follow_redirects=band is None
+                    )
+                    if band is not None and 300 <= response.status_code < 400:
+                        break
+                    # Past its last page Zillow answers 400 rather than serving
+                    # an empty one. Once cards have been read that is the end of
+                    # this search, not the loss of it. Only statuses that mean
+                    # "no such page" end it quietly: a 403 is Zillow turning us
+                    # away rather than running out of homes, and reading it as
+                    # an ending would collect a little, report success, and come
+                    # back tomorrow to be turned away again.
+                    if read_a_card and response.status_code in self.END_OF_RESULTS:
+                        break
+                    document = _require_page(response, self.platform)
+                except (SourceError, httpx.HTTPError) as failure:
+                    # PARTIAL_WALK, the way Zillow needs it. With nothing read
+                    # yet the failure is the whole story, and a source that is
+                    # really blocked is reported as blocked. With homes in hand
+                    # the walk stops -- the band after a refusal is only another
+                    # refusal, and asking again is how a block gets longer --
+                    # keeps every one of them, and still reports the failure, so
+                    # two in a row pause Zillow as they always did.
+                    if not read_a_card:
+                        raise
+                    raise PartialReadError(failure, listings) from failure
+                state = self._search_state(document)
+                results = self._rows(state)
                 if not results:
                     break
                 fresh = 0
@@ -3264,6 +3447,15 @@ class ZillowSource:
                         listings.append(candidate)
                         if len(listings) >= maximum:
                             return listings
+                # Its homes are real San Francisco rentals and are kept, but a
+                # band Zillow did not apply is not walked any further.
+                if band is not None and self._band_ignored(state, band):
+                    LOGGER.warning(
+                        "Zillow did not apply the %s rent band on page %s, so that band is read no further",
+                        band,
+                        page,
+                    )
+                    break
                 # A page that repeats this band's own results is its last,
                 # whatever its numbering claims.
                 if not fresh:
@@ -3476,7 +3668,13 @@ class UloopSource:
         document = ""
 
         for page in range(1, self.max_pages + 1):
-            document = _require_page(client.get(self._page_url(page)), self.platform)
+            # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
+            try:
+                document = _require_page(client.get(self._page_url(page)), self.platform)
+            except (SourceError, httpx.TransportError):
+                if read_a_card:
+                    break
+                raise
             cards = BeautifulSoup(document, "html.parser").select(self.CARD)
             if not cards:
                 break
@@ -3722,9 +3920,15 @@ class RentSFNowSource:
         last_page = self.max_pages
 
         for page in range(1, self.max_pages + 1):
-            document = _require_page(
-                client.post(self.ajax_url, data=self._request(page, floor)), self.platform
-            )
+            # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
+            try:
+                document = _require_page(
+                    client.post(self.ajax_url, data=self._request(page, floor)), self.platform
+                )
+            except (SourceError, httpx.TransportError):
+                if answered:
+                    break
+                raise
             try:
                 payload = json.loads(document)
             except (ValueError, json.JSONDecodeError) as exc:
@@ -5475,10 +5679,20 @@ class SpareRoomSource:
     manual_reason = None
     detail_budget = 0
 
+    def not_needed_for(self, preferences: Preferences) -> str | None:
+        """Why this deal has no use for SpareRoom, or None when it has.
+
+        Asked by the scanner before anything is read. It used to be answered
+        from inside ``search``, as an empty list, and every scan then recorded
+        a successful check of SpareRoom that had found nothing: the page said
+        "working, no matches -- a valid result, not a failure" about a site no
+        request had gone to, for a deal with no private room in it.
+        """
+        if "private_room" in preferences.deal_profile.enabled_paths:
+            return None
+        return "Private rooms are not in Your deal, and SpareRoom lists nothing else, so it was not asked."
+
     def search(self, client: httpx.Client, preferences: Preferences) -> list[ListingCandidate]:
-        if "private_room" not in preferences.deal_profile.enabled_paths:
-            self.empty_result_message = "Skipped because private rooms are not enabled in Your deal."
-            return []
         max_results = setting_int(preferences.section("sources").get("max_results_per_source"), 250)
         response = client.get(self.search_url)
         response.raise_for_status()

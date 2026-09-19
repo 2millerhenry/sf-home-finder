@@ -17,7 +17,7 @@
     <p class="saved-score"><strong>{{ listing.score }}</strong> match{% if listing.eligibility == 'ineligible' %} · <span class="saved-caution">outside deal</span>{% elif listing.checks %} · <span class="saved-caution">{% if listing.lead_check %}check {{ listing.lead_check }}{% else %}needs verification{% endif %}</span>{% endif %}</p>
   </div>
   {% if not expanded %}
-  <h3 class="saved-title"><a href="/listings/{{ listing.id }}">{{ listing.title }}</a></h3>
+  <h3 class="saved-title"><a href="/listings/{{ listing.id }}?from={{ return_to|urlencode }}">{{ listing.title }}</a></h3>
   {% endif %}
   {# On a page devoted to one home the fact table below states all of this
      precisely, so repeating it here would be the same line twice. #}
@@ -27,7 +27,18 @@
     {% if listing.published_at %}· Posted {{ listing.published_at|compact_pacific_date }}{% else %}· Found {{ listing.first_found|compact_pacific_date }}{% endif %}
     {% if listing.available_on %}· Available {{ listing.available_on|compact_move_in_date }}{% endif %}
     {% if listing.home_facts.secondary %}· {{ listing.home_facts.secondary|join(' · ') }}{% endif %}
+    {% if listing.other_platforms %}· Also on {{ listing.other_platforms|join(', ') }}{% endif %}
   </p>
+  {% if listing.other_copy %}
+  {%- set other = listing.other_copy %}
+  <p class="listing-copy-line"><strong>Same home on {{ other.platform }}:</strong>
+    {% if other.price is not none %}${{ "{:,}".format(other.price) }}/mo{% else %}no rent stated{% endif %}
+    {%- if other.disagreement == 'status' and other.shown_inactive %} · {{ listing.platform }} says it is no longer listed; {{ other.platform }} still lists it{% elif other.disagreement == 'status' and other.verified_inactive %} · {{ other.platform }} says it is no longer listed{% elif other.disagreement == 'status' and other.eligibility == 'ineligible' and other.blockers %} · {{ other.platform }}'s listing puts it outside your deal: {{ other.blockers[0].reason }}{% elif other.disagreement == 'status' and other.eligibility != 'ineligible' %} · {{ other.platform }}'s listing fits your deal where this one does not{% elif other.disagreement == 'price' %} · the two sites quote different rents; ask which is current{% endif %}
+    · <a href="/listings/{{ other.id }}?from={{ return_to|urlencode }}">details</a></p>
+  {% endif %}
+  {% for other in listing.other_notes %}
+  <p class="other-note"><strong>Your note on the {{ other.platform }} listing:</strong> {{ other.note }}</p>
+  {% endfor %}
   {% endif %}
   <div class="saved-evidence">
     <div>

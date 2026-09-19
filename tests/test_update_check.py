@@ -245,6 +245,14 @@ def test_nothing_about_the_person_is_sent(monkeypatch: pytest.MonkeyPatch) -> No
     assert update_check.__version__ not in seen["url"]
     headers = seen["kwargs"]["headers"]
     assert set(headers) == {"Accept", "User-Agent"}, f"extra headers: {sorted(headers)}"
+    # The headers are part of the request too. A User-Agent naming the release
+    # tells GitHub exactly which version is installed on that address, which is
+    # the one thing the README promises this request does not say -- and the
+    # assertions above all read the URL, so a version in a header passed them.
+    for name, value in headers.items():
+        assert update_check.__version__ not in str(value), (
+            f"the {name} header sends the installed version: {value}"
+        )
 
 
 @pytest.mark.parametrize("status_code", [301, 401, 403, 404, 429, 500, 503])
@@ -531,3 +539,28 @@ def test_a_mac_reader_is_given_the_command(tmp_path: Path, monkeypatch: pytest.M
         page = client.get("/preferences").text
 
     assert "homefinder update" in page
+
+
+def test_the_request_says_nothing_about_this_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The regression: a User-Agent of "sf-home-finder/0.5.6" told GitHub the
+    exact installed version, against a README that promises the request sends
+    "no query, no identifier, not even which version you are running". GitHub
+    refuses a request with no User-Agent at all, so it names the app and stops
+    there."""
+    import httpx
+
+    captured: dict[str, object] = {}
+
+    def record(url, **kwargs):
+        captured["url"] = str(url)
+        captured["headers"] = dict(kwargs.get("headers") or {})
+        return httpx.Response(200, json={"tag_name": "v9.9.9"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(update_check.httpx, "get", record)
+    assert update_check.fetch_latest_tag() == "v9.9.9"
+
+    sent = " ".join([str(captured["url"]), *(f"{k}: {v}" for k, v in captured["headers"].items())])
+    assert update_check.__version__ not in sent, (
+        f"the installed version was sent to GitHub: {sent}"
+    )
+    assert "?" not in str(captured["url"]), "a query string was added"

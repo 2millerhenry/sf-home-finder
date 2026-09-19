@@ -217,3 +217,38 @@ def test_the_neighborhood_filter_omits_city_wide_values(repository: Repository) 
     assert "Nob Hill" in neighborhoods
     for city_wide in ("San Francisco", "city of san francisco", "SF", "san francisco, ca"):
         assert city_wide not in neighborhoods, f"{city_wide!r} is a city, not a neighborhood"
+
+
+def test_a_scan_that_only_failed_in_the_resolver_reached_nothing(repository: Repository) -> None:
+    """The by-hand budget charged for checks that asked nobody anything.
+
+    With the wifi off every source fails before a socket opens, and SpareRoom
+    still files a "success" it produced without leaving the machine, because
+    private rooms are not in this deal. One phantom row was enough to spend the
+    day's one check, so somebody back on a network was refused a real one.
+    """
+    scan_id = repository.begin_scan("manual")
+    for platform in ("Zillow", "Craigslist"):
+        run = repository.begin_source_run(scan_id, platform, "https://example.test/x")
+        repository.finish_source_run(
+            run, "error", message="ConnectError: [Errno 8] nodename nor servname provided, or not known"
+        )
+    phantom = repository.begin_source_run(scan_id, "SpareRoom", "https://example.test/s")
+    repository.finish_source_run(
+        phantom, "success", seen=0, message="Skipped because private rooms are not enabled in Your deal."
+    )
+    repository.finish_scan(scan_id, "completed_with_errors", failed=2)
+
+    assert repository.recent_scans(1)[0]["sources_reached"] == 0
+
+
+def test_a_scan_the_sites_turned_away_did_reach_them(repository: Repository) -> None:
+    """An HTTP refusal is a request that arrived, and still spends the budget."""
+    scan_id = repository.begin_scan("manual")
+    blocked = repository.begin_source_run(scan_id, "Trulia", "https://example.test/t")
+    repository.finish_source_run(
+        blocked, "error", message="SourceError: Trulia turned away an unattended request (HTTP 403)."
+    )
+    repository.finish_scan(scan_id, "completed_with_errors", failed=1)
+
+    assert repository.recent_scans(1)[0]["sources_reached"] == 1

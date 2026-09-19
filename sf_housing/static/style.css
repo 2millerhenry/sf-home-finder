@@ -1613,6 +1613,8 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
    saving is in the padding and the gap, not the type: the names still have to
    be read at a glance, and the logos are the thing being recognised. */
 .source-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 0.76rem; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.source-chip[data-quiet] { opacity: 0.72; border-style: dashed; }
+.chip-quiet { margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--warn-surface, rgba(180,120,0,0.16)); color: var(--warn-ink, #8a5a00); font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
 .source-mark { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: oklch(var(--mark-light, 54%) 0.13 var(--mark-hue)); color: oklch(99% 0.004 var(--mark-hue)); font-size: 0.6rem; font-weight: 760; letter-spacing: -0.01em; }
 /* Every logo gets the same round tile, whatever it arrived as. Several of
    these are dark marks drawn on their own white square, and without an edge
@@ -1868,3 +1870,16 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
 .size-option input:checked + span { border-color: var(--accent-line); background: var(--accent-soft); color: var(--ink); font-weight: 640; }
 .size-option input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 620px) { .size-choice { flex-direction: column; align-items: flex-start; } }
+
+/* The same home on another site, under the row it disagrees with. */
+.listing-copy td { padding-top: 4px; padding-bottom: 10px; border-top: 0; color: var(--muted); font-size: 0.86rem; }
+.listing-copy .cell-score strong, .listing-copy .cell-price strong { font-size: 0.95rem; }
+.cell-copy-note strong { color: var(--ink); font-weight: 600; }
+.listing-copy-line, .other-note { margin: 6px 0 0; color: var(--muted); font-size: 0.88rem; line-height: 1.45; }
+.order-note { margin: 0 0 12px; color: var(--muted); font-size: 0.88rem; }
+.aged-indicator, .copies-indicator { color: var(--muted); }
+
+/* A page of a long view: the Archive grows with every week of listings. */
+.pager { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 18px 0 4px; color: var(--muted); font-size: 0.9rem; }
+.pager a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.pager a:hover { color: var(--accent-hover); text-decoration: underline; }

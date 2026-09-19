@@ -94,7 +94,27 @@ def test_uninstalling_can_run_with_nobody_at_the_keyboard() -> None:
         "a prompt with nobody to answer it still stops the uninstall"
     )
     # And the fallback is never the destructive one.
-    assert "if ($confirmation -eq 'DELETE')" in script
+    assert "if ($confirmation -ceq 'DELETE')" in script
+
+
+def test_only_the_exact_word_delete_removes_the_data() -> None:
+    """PowerShell's ``-eq`` does not compare case, so ``delete`` erased it.
+
+    The README promises the data survives "unless you explicitly type DELETE",
+    and the macOS script keeps that promise because ``[ "$X" = "DELETE" ]`` is
+    case-sensitive. ``-eq`` is not: on Windows a person typing the word in
+    lower case -- meaning "yes, uninstall" rather than "yes, and destroy months
+    of saved homes and notes" -- lost the database, the logs and every backup,
+    with nothing to restore from.
+    """
+    script = (
+        ROOT / "release_assets" / "windows" / "payload" / "tools" / "uninstall.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "-ceq 'DELETE'" in script, "a case-insensitive compare deletes on 'delete'"
+    assert "-eq 'DELETE'" not in script.replace("-ceq 'DELETE'", ""), (
+        "the case-insensitive compare is still there"
+    )
 
 
 def test_the_windows_installer_waits_as_long_as_the_mac_one_learned_to() -> None:
@@ -166,3 +186,25 @@ def test_upgrading_waits_for_the_old_copy_to_let_go_of_its_files() -> None:
     waiting = script.index("Get-Process -Name 'python'")
     assert stopping < waiting < removing, "it does not wait between stopping and deleting"
     assert "Stop-Process -Force" in script, "a process that will not stop blocks upgrades forever"
+
+
+def test_the_windows_service_is_not_killed_by_unplugging_the_laptop() -> None:
+    """schtasks defaults are written for a desktop, and this app runs on laptops.
+
+    A task created by ``schtasks /Create`` with no settings of its own inherits
+    Windows' defaults: it will not start on battery, is stopped the moment the
+    machine switches to battery, is force-terminated after three days of
+    uptime, and is never restarted when it dies. The macOS side has
+    ``KeepAlive`` and no such conditions, so the README's "it looks again at
+    ten in the morning and six in the evening, every day" is only true on
+    Windows for a plugged-in machine rebooted twice a week.
+    """
+    script = (
+        ROOT / "release_assets" / "windows" / "payload" / "install.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "-AllowStartIfOnBatteries" in script, "the task will not start unplugged"
+    assert "-DontStopIfGoingOnBatteries" in script, "unplugging stops the app"
+    # Zero means no limit, the same promise launchd makes on the Mac.
+    assert "-ExecutionTimeLimit" in script, "Windows kills the service after 72 hours"
+    assert "-RestartCount" in script, "nothing restarts the service when it dies"

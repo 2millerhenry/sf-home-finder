@@ -299,8 +299,9 @@
       </details>
       {% endif %}
       <button class="primary" type="submit" data-deal-submit data-first-activation="{{ 'true' if welcome else 'false' }}"><span data-deal-submit-label>{% if welcome %}Save deal and find matches{% else %}Save deal and rerank{% endif %}</span></button>
-      {#- Saving reranks every stored home before this page can answer, which on
-          a full pool is a real wait with a spinning tab and nothing else. The
+      {#- Saving reranks every home still in play before this page can answer
+          (aged-out homes wait until they are restored), which on a full pool is
+          a real wait with a spinning tab and nothing else. The
           button above is the one thing that says work is happening -- it holds
           the spinner -- so this is a line under it rather than a second panel
           with a second bar saying the same thing in its own box. Hidden from
@@ -309,7 +310,7 @@
           the server, because "reranking 5,235 homes" is a wait somebody can sit
           through and "please wait" is not. -#}
       <p class="deal-saving-note" data-deal-saving-note hidden aria-hidden="true"
-         data-listing-count="{{ stored_listing_count or 0 }}"></p>
+         data-listing-count="{{ rescored_listing_count or 0 }}"></p>
     </div>
   </div>
 </form>

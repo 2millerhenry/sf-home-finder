@@ -72,13 +72,15 @@
     if (!progress.running && !finished) {
       finished = true;
       const hasErrors = progress.status === "completed_with_errors";
-      title.textContent = progress.status === "failed"
+      // Interrupted: the computer slept and the check stopped rather than run on.
+      const stopped = progress.status === "failed" || progress.status === "interrupted";
+      title.textContent = stopped
         ? "Check stopped before it could finish"
         : hasErrors
           ? "Check finished with a source error"
           : "Check complete";
       if (note) {
-        note.textContent = progress.status === "failed"
+        note.textContent = stopped
           ? "Whatever was collected before it stopped has been kept."
           : `${progress.listings_seen || 0} listings read. Showing the best of them now.`;
       }

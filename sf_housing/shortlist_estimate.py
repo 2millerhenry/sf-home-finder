@@ -68,6 +68,7 @@ def estimate_shortlist_counts(
     thresholds: Sequence[int],
     *,
     kinds: Sequence[str] = (),
+    unit_types: Sequence[str] = (),
     ceiling: int = POOL_CEILING,
 ) -> ShortlistEstimate:
     """How many homes each cut-off would shortlist under this deal.
@@ -78,7 +79,9 @@ def estimate_shortlist_counts(
     be one.
     """
     stops = [int(threshold) for threshold in thresholds]
-    sampled, sizes, exact = repository.shortlist_pool(kinds=kinds, ceiling=ceiling)
+    sampled, sizes, exact = repository.shortlist_pool(
+        kinds=kinds, ceiling=ceiling, unit_types=unit_types, with_copies=True
+    )
     if not sampled:
         # Nothing has been collected yet, so there is nothing to count. Saying
         # nought here reads as a verdict on the deal rather than on the empty
@@ -95,12 +98,18 @@ def estimate_shortlist_counts(
     # the cut-off, so it is carried as None rather than dropped. It still has to
     # be counted in its band: the band's share is what gets multiplied back up
     # by the band's true size, and dropping the rejects would inflate it.
-    by_band: dict[int, list[int | None]] = {}
-    for band, listing in sampled:
+    #
+    # A home is one entry however many sites list it, at the best its copies
+    # do: the page shows it when any copy suits the deal.
+    best: dict[tuple[int, str], int | None] = {}
+    for band, home, listing in sampled:
         result = score_listing(_prepared(listing), preferences)
-        by_band.setdefault(band, []).append(
-            None if result.eligibility == "ineligible" else int(result.score)
-        )
+        value = None if result.eligibility == "ineligible" else int(result.score)
+        previous = best.get((band, home))
+        best[(band, home)] = value if previous is None else previous if value is None else max(previous, value)
+    by_band: dict[int, list[int | None]] = {}
+    for (band, _), value in best.items():
+        by_band.setdefault(band, []).append(value)
 
     counts: dict[int, int] = {}
     for stop in stops:

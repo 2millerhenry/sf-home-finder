@@ -124,7 +124,7 @@
         Three tables carry everything worth reading.
       </p>
       <ul>
-        <li><strong>listings</strong> &mdash; one row per home, with its <code>score</code>, <code>price</code>, <code>neighborhood</code>, <code>original_url</code>, and whatever you marked or wrote in <code>status</code> and <code>note</code>.</li>
+        <li><strong>listings</strong> &mdash; one row per listing on one site, with its <code>score</code>, <code>price</code>, <code>neighborhood</code>, <code>original_url</code>, and whatever you marked or wrote in <code>status</code> and <code>note</code>. Rows with the same <code>home_key</code> are one home on several sites. <code>status_reason</code> says who moved a row: <code>user</code> for you, <code>aged</code> for the three-week archive. An aged-out row is deleted once it has been in the archive four months and its site, searched since, has not listed it for as long; nothing you starred, noted or passed ever is.</li>
         <li><strong>scan_runs</strong> &mdash; one row per check, with what started it and how it ended.</li>
         <li><strong>source_runs</strong> &mdash; one row per source within a check, with how many homes it saw.</li>
       </ul>

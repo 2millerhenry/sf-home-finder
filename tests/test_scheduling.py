@@ -276,3 +276,71 @@ def test_the_safety_net_is_also_checked_the_moment_the_app_starts() -> None:
     lifespan = app_source[app_source.index("async def lifespan") : app_source.index("yield")]
 
     assert "sweep_if_due(scanner)" in lifespan
+
+
+def test_the_safety_nets_survive_a_mac_waking_from_sleep() -> None:
+    """A heartbeat dropped on wake is one dropped exactly when it was needed.
+
+    APScheduler allows a job one second of lateness by default and silently
+    skips it beyond that. Both catch-up jobs are the net under a Mac that was
+    asleep, and a sleeping Mac is precisely how their run time goes minutes or
+    hours into the past -- so the default had them logged as "was missed by
+    0:12:48" and dropped on the wake they exist to serve. The real install's
+    log carries fifty such lines for the scan net and twenty-six for the
+    sweep's in sixteen days.
+    """
+    jobs = {job.id: job for job in build_scheduler(FakeScanner()).get_jobs()}
+
+    # Longer than any sleep either net has to survive, and harmless when late:
+    # each one asks the database whether a run is owed before starting one.
+    assert jobs["housing-catch-up"].misfire_grace_time >= 60 * 60
+    assert jobs["housing-deep-sweep-catch-up"].misfire_grace_time >= 60 * 60
+
+
+def _heartbeat_scanner(recent: list[dict], started: list[str]):
+    class Scanner:
+        is_running = False
+
+        class repository:
+            @staticmethod
+            def recent_scans(limit=20):
+                return recent
+
+        @staticmethod
+        def preference_loader():
+            class P:
+                profile_active = True
+
+            return P()
+
+        @staticmethod
+        def start_scan(trigger):
+            started.append(trigger)
+            return True
+
+    return Scanner()
+
+
+def test_a_check_the_computer_slept_through_is_caught_up_within_the_hour_not_in_the_dark() -> None:
+    """Review of WO-5: a check the lid closed on is owed again, but a Mac
+    asleep overnight wakes for a minute now and then, and a catch-up begun in
+    one is cut short by the next sleep -- every try asking the same first
+    sites again. Each heartbeat declines for an hour after such a check, then
+    catches up."""
+    from sf_housing.scanner import SLEPT_SCAN_MESSAGE
+    from sf_housing.scheduling import catch_up_if_due, sweep_if_due
+
+    def slept(hours_ago: float, trigger: str) -> dict:
+        scan = swept(hours_ago, trigger=trigger, status="interrupted")
+        return {**scan, "finished_at": scan["started_at"], "message": SLEPT_SCAN_MESSAGE}
+
+    for hours_ago, expected in ((10 / 60, []), (2, ["catch_up"])):
+        started: list[str] = []
+        assert catch_up_if_due(_heartbeat_scanner([slept(hours_ago, "scheduled")], started)) is bool(expected)
+        assert started == expected, hours_ago
+
+    for hours_ago, expected in ((10 / 60, []), (2, ["deep_sweep"])):
+        started = []
+        recent = [slept(hours_ago, "deep_sweep"), swept(0, trigger="scheduled")]
+        assert sweep_if_due(_heartbeat_scanner(recent, started)) is bool(expected)
+        assert started == expected, hours_ago

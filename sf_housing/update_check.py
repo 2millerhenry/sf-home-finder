@@ -183,8 +183,12 @@ def fetch_latest_tag(timeout: float = REQUEST_TIMEOUT_SECONDS) -> str | None:
             headers={
                 "Accept": "application/vnd.github+json",
                 # Named so that if this ever does become a burden on GitHub
-                # they can see what it is rather than having to guess.
-                "User-Agent": f"sf-home-finder/{__version__}",
+                # they can see what it is rather than having to guess. The
+                # version is deliberately left out: GitHub refuses a request
+                # with no User-Agent at all, but naming the release would tell
+                # them which version this machine is running, which is the one
+                # thing this is promised never to say.
+                "User-Agent": "sf-home-finder",
             },
         )
         if response.status_code != 200:

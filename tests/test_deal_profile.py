@@ -767,32 +767,38 @@ def test_nothing_the_form_can_set_was_dropped(tmp_path: Path) -> None:
 def test_the_slider_count_matches_the_rows_the_tabs_will_show(tmp_path: Path) -> None:
     """The number under the slider is a promise about the next page you will
     see. It counted every home shape in the database, so a deal for rooms alone
-    counted whole units the tabs would never display."""
+    counted whole units the tabs would never display.
+
+    Every home the deal lets through is on exactly one tab now -- the Other
+    homes tab holds whatever no size tab does -- so the promise is the sum of
+    the tabs. Scored for real: a rooms-only deal rules the studios out itself
+    ("Studio is not enabled in your deal"), so they are on no tab and in no
+    count."""
     import re
 
-    from sf_housing.models import ListingCandidate, ScoreResult
+    from sf_housing.models import ListingCandidate
+    from sf_housing.scoring import score_listing
 
     settings = settings_for(tmp_path)
     settings.preferences_path.parent.mkdir(parents=True, exist_ok=True)
     settings.preferences_path.write_text(profile_with_room_budget(5000), encoding="utf-8")
     application = create_app(settings=settings, sources=[], enable_scheduler=False)
     repository = application.state.repository
+    deal = load_preferences(settings.preferences_path)
 
     def store(source_id: str, kind: str, listing_type: str) -> None:
-        repository.upsert_listing(
-            ListingCandidate(
-                platform="Craigslist",
-                source_id=source_id,
-                title=f"A {listing_type} in NOPA",
-                original_url=f"https://sfbay.craigslist.org/x/{source_id}.html",
-                price=1500,
-                neighborhood="NOPA",
-                listing_type=listing_type,
-                summary="Available now.",
-                housing_kind=kind,
-            ),
-            ScoreResult(90, ["fits"], "", {}),
+        listing = ListingCandidate(
+            platform="Craigslist",
+            source_id=source_id,
+            title=f"A {listing_type} in NOPA",
+            original_url=f"https://sfbay.craigslist.org/x/{source_id}.html",
+            price=1500,
+            neighborhood="NOPA",
+            listing_type=listing_type,
+            summary="Available now.",
+            housing_kind=kind,
         )
+        repository.upsert_listing(listing, score_listing(listing, deal))
 
     for index in range(4):
         store(f"room{index}", "room", "Room/share")
@@ -802,14 +808,17 @@ def test_the_slider_count_matches_the_rows_the_tabs_will_show(tmp_path: Path) ->
     with TestClient(application) as client:
         wait_until_idle(application)
         page = client.get("/preferences").text
-        rows = len(re.findall(r'<tr class="listing-row', client.get("/?housing=room").text))
+        rows = sum(
+            len(re.findall(r'<tr class="listing-row', client.get(f"/?housing={tab}").text))
+            for tab in ("room", "other")
+        )
 
     counts = json.loads(re.search(r"data-cutoff-counts='([^']+)'", page).group(1))
-    cutoff = load_preferences(settings.preferences_path).minimum_score
+    cutoff = deal.minimum_score
     assert counts[str(cutoff)] == rows, (
-        f"slider says {counts[str(cutoff)]}, the tab shows {rows}"
+        f"slider says {counts[str(cutoff)]}, the tabs show {rows}"
     )
-    assert counts[str(cutoff)] == 4, "the three whole units are not on this deal's tabs"
+    assert counts[str(cutoff)] == 4, "the three studios are not on this deal's tabs"
 
 
 # --------------------------------------------------------------------------

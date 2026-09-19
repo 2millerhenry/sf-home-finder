@@ -19,6 +19,7 @@ from .classification import (
     unit_type_label,
 )
 from .location import (
+    GENERIC_LOCATIONS,
     OUTSIDE_SF_CITIES,
     declared_outside_sf_area_hint,
     declared_outside_sf_url_hint,
@@ -165,7 +166,6 @@ PROPERTY_ALIASES = {
     "shared flat": ("shared flat", "flat", "shared apartment"),
     "apartment": ("apartment",),
 }
-GENERIC_LOCATIONS = {"sf", "san francisco", "city of san francisco", "san francisco, ca"}
 LOCATION_FALSE_SUFFIXES = {
     "avenue", "ave", "boulevard", "blvd", "road", "rd", "street", "st", "way", "valley"
 }
@@ -816,6 +816,13 @@ def _availability(listing: ListingCandidate, preferences: Preferences) -> Criter
     )
 
 
+# Keyed on an area label rather than on a listing's text, which is why this one
+# is worth caching where the text-keyed caches are not: a board of 8,680 homes
+# carries 213 distinct neighbourhood strings between them, so a pass over it
+# asks this the same question about the same forty-odd words again and again.
+# Measured hit rate over one pass: 97.5%. Pure in the way that makes caching
+# safe -- one string in, one bool out, no clock and no state.
+@lru_cache(maxsize=4096)
 def _recognisably_san_francisco(location: str) -> bool:
     """Is this location string actually evidence of San Francisco?
 
@@ -1307,6 +1314,16 @@ def _score_whole_unit(listing: ListingCandidate, preferences: Preferences) -> Sc
         constraints.append({"status": "fail", "check": "sublet term", "reason": f"The sublet is shorter than {_sublet_minimum(preferences)} months."})
     if neighborhood.match_label:
         details["neighborhood"]["match_label"] = neighborhood.match_label
+    # Whole homes are where the published dates actually are -- AvalonBay,
+    # Rent.com and ApartmentGuide between them state one on 251 homes in the
+    # author's database -- and this path never wrote the date anywhere the page
+    # could read it, so the Move-in column, the soonest-move-in sort and the CSV
+    # said "Not stated" for every one of them.
+    whole_unit_available_on = _available_on(listing)
+    if whole_unit_available_on:
+        details.setdefault("availability", {})["available_on"] = (
+            whole_unit_available_on.isoformat()
+        )
     return _finalize_score(ScoreResult(score, shown_reasons, concern, details))
 
 
@@ -1381,6 +1398,16 @@ def score_listing(listing: ListingCandidate, preferences: Preferences) -> ScoreR
     score = max(0, min(100, round(raw_score - (20 if dealbreaker_hits else 0))))
     by_name = {item.name: item for item in active}
     neighborhood = by_name.get("neighborhood")
+    # A deal that enables no private-room path has no room budget, so the rent
+    # criterion arrives unconfigured and is dropped before it can judge
+    # anything. Homes of a shape the classifier could not call are scored here
+    # all the same, which left them measured on whatever else was configured
+    # and never against the money: on a real board a $7,500 two-bedroom was
+    # rendered "100 match" for a $3,000 deal on the strength of its
+    # neighbourhood alone, and seventy stored homes were in that state. An
+    # unmeasured rent is an unknown, and this caps homes it could not check
+    # rather than recommending them.
+    rent_unmeasured = "price" not in by_name and listing.price is not None
 
     # These are explicit boundaries in the housing deal, not soft preferences.
     # Keep violations for history, but do not let unrelated amenities lift them
@@ -1424,6 +1451,8 @@ def score_listing(listing: ListingCandidate, preferences: Preferences) -> ScoreR
     room_verified_inactive = listing.metadata.get("verified_inactive") is True
     if room_verified_inactive:
         score = min(score, 49)
+    if rent_unmeasured:
+        score = min(score, 59)
 
     ranked_reasons = sorted(
         (item for item in active if item.positive),
@@ -1482,8 +1511,16 @@ def score_listing(listing: ListingCandidate, preferences: Preferences) -> ScoreR
             max(0, int(listing.price) - int(room_ceiling)) if listing.price is not None else None
         )
     available_on = _available_on(listing)
-    if available_on and "availability" in details:
-        details["availability"]["available_on"] = available_on.isoformat()
+    if available_on:
+        # setdefault, not "if already there": the dashboard's Move-in column,
+        # the soonest-move-in sort and the CSV all read this, while the key it
+        # was being written into only exists when the availability criterion
+        # scored -- which needs a move-in window in the deal. Somebody who left
+        # move-in flexible, the default the onboarding writes, switched the
+        # criterion off and with it the only route a published date had to the
+        # page: 251 homes in the author's database carried a real "available
+        # from" date and every one of them read "Not stated".
+        details.setdefault("availability", {})["available_on"] = available_on.isoformat()
     details["home_facts"] = _home_facts(text, criteria)
     details["sublease"] = {
         "is_sublease": is_sublet,
@@ -1506,6 +1543,12 @@ def score_listing(listing: ListingCandidate, preferences: Preferences) -> ScoreR
             not private_room.known and not room_evidence
         )
     hard_constraints: list[dict[str, str]] = []
+    if rent_unmeasured:
+        hard_constraints.append({
+            "status": "unknown",
+            "check": "price",
+            "reason": f"${listing.price:,}/month has not been checked against a budget for this kind of home.",
+        })
     if neighborhood:
         if neighborhood.known and neighborhood.value == 0:
             hard_constraints.append({"status": "fail", "check": "area", "reason": neighborhood.mismatch or "Outside your selected areas."})

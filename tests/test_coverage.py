@@ -29,6 +29,12 @@ from sf_housing.coverage import (
 )
 from sf_housing.database import Repository
 
+# The rest of the suite has the count stubbed out of every scan. This file is
+# where it is tested, so its scans run the real pass -- each faking fetch_count
+# or the transport beneath it, and never_reach_the_internet catching one that
+# does not.
+pytestmark = pytest.mark.coverage_pass
+
 FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "coverage"
 PLATFORMS = {
     "hotpads": "HotPads",

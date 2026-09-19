@@ -7,7 +7,6 @@ and checks the user is left with a true statement and a next step.
 
 from __future__ import annotations
 
-import imaplib
 import pathlib
 import sqlite3
 import sys
@@ -23,6 +22,7 @@ from sf_housing.imap_alerts import ImapAlertError, ImapAlertMailbox
 from sf_housing.models import ListingCandidate, ScoreResult
 from sf_housing.preferences import parse_preferences
 from sf_housing.scanner import Scanner
+from sf_housing.sources import SourceError
 from tests.conftest import TEST_PREFERENCES
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -585,14 +585,17 @@ def test_the_detail_ceiling_never_outlasts_what_the_phase_has_left(
         def enrich(self, client, listing):
             raise AssertionError("never reached")
 
-    scanner._within_ceiling = lambda label, ceiling, run, *, timed_out: asked.append(ceiling)
+    # A clock that stands still, so each call's limit reads as its ceiling
+    # exactly; limits are on the scanner's clock, never on time.monotonic.
+    scanner._clock = lambda: 1000.0
+    scanner._within_ceiling = lambda label, limit, run, *, timed_out, out_of_time: asked.append(limit.end - 1000.0)
 
     near = DETAIL_HARD_CEILING_SECONDS / 3
     scanner._enrich_within_ceiling(
-        Recorder(), None, room("x"), limit=time.monotonic() + near
+        Recorder(), None, room("x"), limit=1000.0 + near
     )
     scanner._enrich_within_ceiling(
-        Recorder(), None, room("x"), limit=time.monotonic() + DETAIL_HARD_CEILING_SECONDS * 5
+        Recorder(), None, room("x"), limit=1000.0 + DETAIL_HARD_CEILING_SECONDS * 5
     )
 
     assert asked[0] < DETAIL_HARD_CEILING_SECONDS, "a near limit has to shorten the ceiling"
@@ -805,6 +808,13 @@ def test_a_source_that_is_refusing_us_is_asked_no_more_often_than_one_that_is_no
         scanner.run_scan("manual")
 
     assert source.reads == 1, f"a refusing source was asked {source.reads} times"
+    # And it was refused, not broken: the stand-in once raised a name nobody
+    # had imported, so what this exercised was a NameError, not a refusal.
+    with repository.connection() as connection:
+        first = connection.execute("SELECT status, message FROM source_runs ORDER BY id LIMIT 1").fetchone()
+    assert first["status"] == "error" and first["message"].startswith("SourceError:"), (
+        f"the stand-in did not refuse the way a source does: {first['message']!r}"
+    )
 
 
 def test_a_brand_new_install_reads_the_source_straight_away(
@@ -823,3 +833,590 @@ def test_a_brand_new_install_reads_the_source_straight_away(
     with repository.connection() as connection:
         kept = [r["source_id"] for r in connection.execute("SELECT source_id FROM listings")]
     assert sorted(kept) == ["z1", "z2"]
+
+
+# --------------------------------------------------------------------------
+# 7. the database rots in the middle rather than at the front
+# --------------------------------------------------------------------------
+
+
+def half_corrupt(source: pathlib.Path, destination: pathlib.Path) -> pathlib.Path:
+    """A database whose header still reads but whose pages do not.
+
+    This is what a bad sector, a full disk or a killed write actually leaves
+    behind: SQLite opens the file and answers PRAGMAs, and only fails when a
+    query walks into the damaged page.
+    """
+    repository = Repository(destination)
+    repository.initialize()
+    for index in range(400):
+        repository.upsert_listing(room(f"c{index}"), ScoreResult(70, ["Fits"], "", {}))
+    with sqlite3.connect(destination) as connection:
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    body = bytearray(destination.read_bytes())
+    # Leave page 1 -- the header and the schema -- intact, wreck the rest.
+    body[8192 : 8192 + 4096] = b"\x00" * 4096
+    destination.write_bytes(bytes(body))
+    return destination
+
+
+def test_a_database_damaged_past_its_header_is_caught_at_startup(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Corruption below page one used to open cleanly and then throw
+    ``database disk image is malformed`` out of whatever query ran first, which
+    reached the reader as a bare 500 with no file named and no way back. The
+    check that catches it has to run where the readable message already is."""
+    database = half_corrupt(tmp_path / "seed.sqlite3", tmp_path / "housing.sqlite3")
+
+    with pytest.raises(DatabaseUnreadableError) as raised:
+        Repository(database).initialize()
+
+    assert str(database) in str(raised.value), "say which file"
+    assert "Repair" in str(raised.value), "say what to do"
+    assert database.exists(), "the damaged file is evidence; it is never removed"
+
+
+def test_a_healthy_database_is_not_called_damaged(tmp_path: pathlib.Path) -> None:
+    """The guard runs on every start, so a false positive would lock a working
+    install out of its own data."""
+    repository = Repository(tmp_path / "housing.sqlite3")
+    repository.initialize()
+    repository.upsert_listing(room("ok"), ScoreResult(80, ["Fits"], "", {}))
+
+    repository.initialize()
+
+    assert len(repository.query_listings(0, view="all")) == 1
+
+
+# --------------------------------------------------------------------------
+# 8. Repair does what the app tells the reader it does
+# --------------------------------------------------------------------------
+
+
+def repair_install(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    """An app root with Repair in it, as a real install has it.
+
+    Repair runs the release's own backup rules with a Python the machine
+    already has, so this gives it both: an installed runtime's ``python`` and a
+    wheel in the release carrying ``sf_housing.backups`` -- built from the
+    package in this repo, so these tests run the code that ships. The installer
+    Repair calls afterwards is a stub; what is tested here is what Repair does
+    to the data, which must not depend on the reinstall succeeding.
+    """
+    import shutil
+    import zipfile
+
+    app_root = tmp_path / "app"
+    (app_root / "data").mkdir(parents=True)
+    (app_root / "tools").mkdir(parents=True)
+    (app_root / "current" / "bin").mkdir(parents=True)
+    (app_root / "current" / "bin" / "python").symlink_to(sys.executable)
+    shutil.copy(REPO_ROOT / "release_assets" / "payload" / "tools" / "repair.sh", app_root / "tools")
+    release = tmp_path / "release"
+    (release / "payload").mkdir(parents=True)
+    with zipfile.ZipFile(release / "payload" / "sf_home_finder-0.0.0-py3-none-any.whl", "w") as wheel:
+        for name in ("__init__.py", "backups.py"):
+            wheel.write(REPO_ROOT / "sf_housing" / name, f"sf_housing/{name}")
+    installer = release / "payload" / "install.sh"
+    installer.write_text("#!/bin/bash\necho stub installer ran\n", encoding="utf-8")
+    installer.chmod(0o755)
+    return app_root, release
+
+
+def run_repair(app_root: pathlib.Path, release: pathlib.Path, **extra_env: str):
+    import subprocess
+
+    # A tripwire, not a formality. `launchctl bootout <plist>` stops whatever
+    # service carries the label *inside* that plist, so a test that created one
+    # here would stop the real app on the machine running the tests. Repair
+    # finds the plist under HOME, which is this temporary directory.
+    plist = app_root.parent / "Library" / "LaunchAgents" / "com.sfhousing.monitor.plist"
+    assert not plist.exists(), "a test must never give Repair a login service to stop"
+    # From outside this repo, as a person runs it, so its own sf_housing can
+    # never answer for the release's.
+    return subprocess.run(
+        [str(app_root / "tools" / "repair.sh")],
+        capture_output=True,
+        text=True,
+        cwd=app_root.parent,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(app_root.parent),
+            "SF_HOUSING_APP_ROOT": str(app_root),
+            "SF_HOUSING_RELEASE_ROOT": str(release),
+            **extra_env,
+        },
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_puts_the_last_good_backup_back(tmp_path: pathlib.Path) -> None:
+    """The unreadable-database message and the service log both promise that
+    Repair restores the most recent backup. Repair only ever made one: a reader
+    who followed the instruction got the same dead app and no way to find out
+    why."""
+    app_root, release = repair_install(tmp_path)
+    live = app_root / "data" / "housing.sqlite3"
+    good = Repository(tmp_path / "good.sqlite3")
+    good.initialize()
+    good.upsert_listing(room("saved-home"), ScoreResult(90, ["Fits"], "", {}))
+    (app_root / "backups").mkdir()
+    backup = app_root / "backups" / "housing-20260101-000000.sqlite3"
+    backup.write_bytes((tmp_path / "good.sqlite3").read_bytes())
+    live.write_bytes(b"this is not a database")
+
+    result = run_repair(app_root, release)
+
+    assert result.returncode == 0, result.stderr
+    restored = Repository(live)
+    restored.initialize()
+    assert [c.source_id for _, c in restored.all_candidates()] == ["saved-home"]
+    assert list((app_root / "backups").glob("housing-unreadable-*.sqlite3")), (
+        "the unreadable file is kept as evidence, never deleted"
+    )
+
+
+# What Repair was up to 0.5.6, and still is in the tools/ of every Mac that
+# installed one of those: a copy by ``cp``, every backup older than thirty days
+# deleted, nothing restored, then the reinstall.
+OLDER_REPAIR = """#!/bin/bash
+set -u
+APP_ROOT="${SF_HOUSING_APP_ROOT:-$HOME/Library/Application Support/SF Housing Monitor}"
+find "$APP_ROOT/backups" -name 'housing-*.sqlite3' -mtime +30 -delete
+"$SF_HOUSING_RELEASE_ROOT/payload/install.sh" "$SF_HOUSING_RELEASE_ROOT"
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_the_repair_a_new_release_ships_is_the_one_that_runs_on_a_mac_an_older_one_installed(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Pre-launch audit: double-clicking Repair in the new release folder ran
+    whatever repair.sh the installed app had in tools/ -- on a Mac that ever
+    installed 0.5.6 or earlier, the script that restores nothing and deletes
+    every backup older than thirty days. The person whose board would not open
+    followed the instructions and lost the copy that held their homes."""
+    import os
+    import shutil
+    import time
+
+    app_root, release = repair_install(tmp_path)
+    (app_root / "tools" / "repair.sh").write_text(OLDER_REPAIR, encoding="utf-8")
+    (app_root / "tools" / "repair.sh").chmod(0o755)
+    (release / "payload" / "tools").mkdir()
+    shutil.copy(REPO_ROOT / "release_assets" / "payload" / "tools" / "repair.sh", release / "payload" / "tools")
+    wrapper = release / "Repair SF Home Finder.command"
+    shutil.copy(REPO_ROOT / "release_assets" / "Repair SF Home Finder.command", wrapper)
+    wrapper.chmod(0o755)
+    (release / "payload" / "tools" / "repair.sh").chmod(0o755)
+    good = Repository(tmp_path / "good.sqlite3")
+    good.initialize()
+    good.upsert_listing(room("saved-home"), ScoreResult(90, ["Fits"], "", {}))
+    (app_root / "backups").mkdir()
+    backup = app_root / "backups" / "housing-20260801-000000.sqlite3"
+    backup.write_bytes((tmp_path / "good.sqlite3").read_bytes())
+    six_weeks_ago = time.time() - 45 * 86400
+    os.utime(backup, (six_weeks_ago, six_weeks_ago))
+    live = app_root / "data" / "housing.sqlite3"
+    live.write_bytes(b"this is not a database")
+    plist = app_root.parent / "Library" / "LaunchAgents" / "com.sfhousing.monitor.plist"
+    assert not plist.exists(), "a test must never give Repair a login service to stop"
+
+    import subprocess
+
+    result = subprocess.run(
+        [str(wrapper)],
+        capture_output=True,
+        text=True,
+        cwd=release,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(app_root.parent), "SF_HOUSING_APP_ROOT": str(app_root)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert backup.exists(), "Repair deleted the only good backup"
+    restored = Repository(live)
+    restored.initialize()
+    assert [c.source_id for _, c in restored.all_candidates()] == ["saved-home"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_leaves_a_working_database_alone(tmp_path: pathlib.Path) -> None:
+    """Repair is what people run when anything at all is wrong. Restoring a
+    backup over a healthy database would throw away every home found since it."""
+    app_root, release = repair_install(tmp_path)
+    live = app_root / "data" / "housing.sqlite3"
+    repository = Repository(live)
+    repository.initialize()
+    repository.upsert_listing(room("found-today"), ScoreResult(90, ["Fits"], "", {}))
+    (app_root / "backups").mkdir()
+    stale = Repository(tmp_path / "stale.sqlite3")
+    stale.initialize()
+    (app_root / "backups" / "housing-20260101-000000.sqlite3").write_bytes(
+        (tmp_path / "stale.sqlite3").read_bytes()
+    )
+
+    result = run_repair(app_root, release)
+
+    assert result.returncode == 0, result.stderr
+    assert [c.source_id for _, c in Repository(live).all_candidates()] == ["found-today"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_never_prunes_away_the_only_good_backup(tmp_path: pathlib.Path) -> None:
+    """Backups were deleted by age. A database that went bad more than a month
+    after the last upgrade meant Repair deleted the last readable copy of the
+    user's homes and put a copy of the corrupt one in its place."""
+    import os
+    import time
+
+    app_root, release = repair_install(tmp_path)
+    live = app_root / "data" / "housing.sqlite3"
+    good = Repository(tmp_path / "good.sqlite3")
+    good.initialize()
+    good.upsert_listing(room("saved-home"), ScoreResult(90, ["Fits"], "", {}))
+    (app_root / "backups").mkdir()
+    backup = app_root / "backups" / "housing-20260101-000000.sqlite3"
+    backup.write_bytes((tmp_path / "good.sqlite3").read_bytes())
+    ancient = time.time() - 90 * 86400
+    os.utime(backup, (ancient, ancient))
+    live.write_bytes(b"this is not a database")
+
+    run_repair(app_root, release)
+
+    assert backup.exists(), "the only readable copy of the user's homes was deleted"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_open_waits_as_long_for_a_first_answer_as_the_installer_does() -> None:
+    """A first start re-ranks every stored home before it serves anything: 42
+    seconds on a board of 8,583, and it grows with the board. Open waited 30
+    and then told the reader the dashboard did not start and to run Repair,
+    which restarts it and starts the same wait over."""
+    tools = REPO_ROOT / "release_assets" / "payload" / "tools"
+    opener = (tools / "open.sh").read_text(encoding="utf-8")
+    installer = (REPO_ROOT / "release_assets" / "payload" / "install.sh").read_text(encoding="utf-8")
+
+    def window(script: str) -> int:
+        import re
+
+        return max(int(match) for match in re.findall(r"/usr/bin/seq 1 (\d+)", script))
+
+    assert window(opener) >= window(installer), "Open gives up before the app is up"
+    assert "did not start" not in opener, "a slow start is not a failed start"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_a_restored_board_carries_its_own_scoring_mark(tmp_path: pathlib.Path) -> None:
+    """Restoring a backup must not inherit the live board's claim about its scores.
+
+    The mark that says "already scored by this code with these answers" lives
+    inside the database, in the same transaction as the scores. That is what
+    makes a restore safe without Repair having to remember anything: the
+    backup brings whatever mark it was taken with, so a backup from before a
+    change of deal cannot present itself as current.
+    """
+    live = Repository(tmp_path / "live.sqlite3")
+    live.initialize()
+    with live.connection() as connection:
+        live.set_scoring_mark(connection, "the live board's mark")
+        connection.commit()
+
+    backup = Repository(tmp_path / "backup.sqlite3")
+    backup.initialize()
+    with backup.connection() as connection:
+        backup.set_scoring_mark(connection, "an older mark, from an older deal")
+        connection.commit()
+
+    # What Repair does: the backup's bytes become the live file.
+    (tmp_path / "live.sqlite3").write_bytes((tmp_path / "backup.sqlite3").read_bytes())
+
+    assert Repository(tmp_path / "live.sqlite3").scoring_mark() == (
+        "an older mark, from an older deal"
+    ), "the restored board answered with the mark of the board it replaced"
+
+
+def test_a_board_older_than_the_mark_asks_to_be_scored(tmp_path: pathlib.Path) -> None:
+    """A database from before this table existed knows nothing, so it is owed a pass."""
+    old_board = tmp_path / "old.sqlite3"
+    connection = sqlite3.connect(old_board)
+    connection.execute("CREATE TABLE listings (id INTEGER PRIMARY KEY)")
+    connection.commit()
+    connection.close()
+
+    assert Repository(old_board).scoring_mark() is None
+
+
+
+def _damaged(path: pathlib.Path) -> None:
+    path.write_bytes(b"this is not a database")
+
+
+def _good_backup(app_root: pathlib.Path, stamp: str, source_id: str) -> pathlib.Path:
+    folder = app_root / "backups"
+    folder.mkdir(exist_ok=True)
+    board = Repository(folder.parent / f"staging-{stamp}.sqlite3")
+    board.initialize()
+    board.upsert_listing(room(source_id), ScoreResult(90, ["Fits"], "", {}))
+    target = folder / f"housing-{stamp}.sqlite3"
+    target.write_bytes(board.path.read_bytes())
+    board.path.unlink()
+    return target
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_clicked_thirty_times_on_a_board_that_keeps_breaking_still_restores(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The regression that motivated rebuilding Repair, through the script itself.
+
+    Every Repair snapshots the live file, damaged or not. The old rule kept the
+    twenty newest copies of any kind, so a board that kept breaking filled the
+    folder with copies of its own damage and pruned the one good backup before
+    the restore went looking. The thirtieth click must restore it like the first.
+    """
+    app_root, release = repair_install(tmp_path)
+    live = app_root / "data" / "housing.sqlite3"
+    good = _good_backup(app_root, "20260101-000000", "the-home-from-before")
+
+    for click in range(30):
+        _damaged(live)
+        result = run_repair(app_root, release)
+        assert result.returncode == 0, f"click {click + 1}: {result.stdout}{result.stderr}"
+        assert [c.source_id for _, c in Repository(live).all_candidates()] == ["the-home-from-before"], (
+            f"click {click + 1} did not put the homes back"
+        )
+    assert good.exists(), "the only good backup was pruned"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_keeps_the_backups_folder_bounded(tmp_path: pathlib.Path) -> None:
+    from sf_housing.backups import KEEP_GOOD
+
+    app_root, release = repair_install(tmp_path)
+    live = app_root / "data" / "housing.sqlite3"
+    board = Repository(live)
+    board.initialize()
+    board.upsert_listing(room("today"), ScoreResult(90, ["Fits"], "", {}))
+    for day in range(1, 29):
+        _good_backup(app_root, f"202608{day:02d}-120000", f"home-{day}")
+
+    assert run_repair(app_root, release).returncode == 0
+    assert len(list((app_root / "backups").glob("housing-*.sqlite3"))) == KEEP_GOOD
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_applies_this_release_s_rules_not_the_installed_app_s(tmp_path: pathlib.Path) -> None:
+    """Repairing an older install must run the rules in the release being run.
+
+    0.5.6 ships no ``sf_housing.backups`` at all, so a Repair that imported the
+    installed package would fail on exactly the machines that need it. The
+    installed runtime here is a real virtual environment holding an
+    ``sf_housing`` without that module -- a faithful 0.5.6 -- so only the
+    release's wheel can supply the rules.
+    """
+    import subprocess
+
+    app_root, release = repair_install(tmp_path)
+    current = app_root / "current"
+    (current / "bin" / "python").unlink()
+    (current / "bin").rmdir()
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(current)], check=True)
+    site = next(current.glob("lib/python*/site-packages"))
+    (site / "sf_housing").mkdir()
+    (site / "sf_housing" / "__init__.py").write_text('__version__ = "0.5.6"\n', encoding="utf-8")
+    # From outside this repo, so its own sf_housing cannot answer instead.
+    old = subprocess.run(
+        [str(current / "bin" / "python"), "-c", "import sf_housing.backups"],
+        capture_output=True, text=True, cwd=tmp_path,
+    )
+    assert old.returncode != 0, "the fixture must look like 0.5.6, with no backups module installed"
+
+    live = app_root / "data" / "housing.sqlite3"
+    _good_backup(app_root, "20260901-000000", "saved-home")
+    _damaged(live)
+
+    result = run_repair(app_root, release)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Restored the backup" in result.stdout, result.stdout
+    assert [c.source_id for _, c in Repository(live).all_candidates()] == ["saved-home"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_is_not_thrown_by_a_python_setting_in_the_environment(tmp_path: pathlib.Path) -> None:
+    """A PYTHONPATH left by other software reaches every Python that reads the
+    environment: here its ``sitecustomize`` ends any such Python at start-up,
+    and its ``sf_housing.backups`` would claim success without doing anything.
+    Repair runs its Pythons isolated, so neither gets a say."""
+    app_root, release = repair_install(tmp_path)
+    decoy = tmp_path / "decoy"
+    (decoy / "sf_housing").mkdir(parents=True)
+    (decoy / "sitecustomize.py").write_text("raise SystemExit(99)\n", encoding="utf-8")
+    (decoy / "sf_housing" / "__init__.py").write_text("", encoding="utf-8")
+    (decoy / "sf_housing" / "backups.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    live = app_root / "data" / "housing.sqlite3"
+    _good_backup(app_root, "20260901-000000", "saved-home")
+    _damaged(live)
+
+    result = run_repair(app_root, release, PYTHONPATH=str(decoy))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [c.source_id for _, c in Repository(live).all_candidates()] == ["saved-home"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_says_so_when_checking_the_data_fails(tmp_path: pathlib.Path) -> None:
+    """A crash in the rules is not "your data is fine". It is said, the data is
+    left alone, and the app files are still repaired."""
+    import zipfile
+
+    app_root, release = repair_install(tmp_path)
+    wheel = next((release / "payload").glob("sf_home_finder-*.whl"))
+    with zipfile.ZipFile(wheel, "w") as broken:
+        broken.writestr("sf_housing/__init__.py", "")
+        broken.writestr("sf_housing/backups.py", "def main(argv):\n    raise RuntimeError('boom')\n")
+    live = app_root / "data" / "housing.sqlite3"
+    _damaged(live)
+    before = live.read_bytes()
+
+    result = run_repair(app_root, release)
+
+    assert "stopped with an error" in result.stdout, result.stdout + result.stderr
+    assert live.read_bytes() == before
+    assert "stub installer ran" in result.stdout
+
+
+def test_repair_stops_the_app_before_it_touches_the_data() -> None:
+    """A restore replaces the database file, and a running app could go on
+    writing to the one being replaced. launchctl cannot be run from a test
+    without reaching the real service, so this half is read: the login service
+    is stopped inside the step that waits for the process, that step comes
+    before the rules run, and every way out starts the service again."""
+    script = (REPO_ROOT / "release_assets" / "payload" / "tools" / "repair.sh").read_text(encoding="utf-8")
+    stop = script[script.index("stop_app() {"):]
+    assert stop.index("service stop") < stop.index("app_running"), "it does not wait after asking launchd"
+    body = script[script.index('if [ -f "$APP_ROOT/data/housing.sqlite3" ]; then'):]
+    assert body.index("stop_app") < body.index("sf_housing.backups import main"), "the data is touched with the app running"
+    no_copy = body[body.index('if [ "$STATUS" -eq 2 ]; then'):]
+    assert no_copy.index("service start") < no_copy.index("exit 2"), "a Repair that stops early leaves the app off"
+    failed = body[body.index('if ! "$INSTALLER"'):]
+    assert failed.index("service start") < failed.index("exit 1"), "a failed reinstall leaves the app off"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_waits_for_the_app_itself_to_stop_before_touching_the_data(tmp_path: pathlib.Path) -> None:
+    """``launchctl bootout`` can return before the process is gone, and an app
+    started some other way has no login service to stop at all. Here the app
+    is a stand-in with the real app's command line; it notes what the database
+    looked like at the moment it was told to stop, which must be before the
+    restore -- and it must be gone by the time the data is touched."""
+    import hashlib
+    import subprocess
+    import textwrap
+    import time
+
+    app_root, release = repair_install(tmp_path)
+    live = app_root / "data" / "housing.sqlite3"
+    _good_backup(app_root, "20260901-000000", "saved-home")
+    _damaged(live)
+    damaged = hashlib.sha256(live.read_bytes()).hexdigest()
+    seen, ready = tmp_path / "seen-at-stop", tmp_path / "ready"
+    stand_in = tmp_path / "stand_in.py"
+    stand_in.write_text(textwrap.dedent(f"""
+        import hashlib, pathlib, signal, sys, time
+        def stop(*_):
+            data = pathlib.Path({str(live)!r}).read_bytes()
+            pathlib.Path({str(seen)!r}).write_text(hashlib.sha256(data).hexdigest())
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, stop)
+        pathlib.Path({str(ready)!r}).write_text("up")
+        while True:
+            time.sleep(0.1)
+    """), encoding="utf-8")
+    command = f'{app_root}/current/bin/python -m sf_housing serve'
+    app = subprocess.Popen(["/bin/bash", "-c", f'exec -a "{command}" "{sys.executable}" "{stand_in}"'])
+    try:
+        for _ in range(100):
+            if ready.exists():
+                break
+            time.sleep(0.05)
+        assert ready.exists(), "the stand-in never started"
+
+        result = run_repair(app_root, release)
+
+        assert app.wait(timeout=10) == 0, "the app was not stopped"
+    finally:
+        if app.poll() is None:
+            app.kill()
+    assert seen.read_text() == damaged, "the data was changed before the app had stopped"
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [c.source_id for _, c in Repository(live).all_candidates()] == ["saved-home"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_with_no_way_to_run_its_rules_leaves_the_data_exactly_as_it_is(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Failing toward the data: nothing cruder is let near it instead."""
+    app_root, release = repair_install(tmp_path)
+    (app_root / "current" / "bin" / "python").unlink()
+    live = app_root / "data" / "housing.sqlite3"
+    _good_backup(app_root, "20260901-000000", "saved-home")
+    _damaged(live)
+    before = live.read_bytes()
+
+    result = run_repair(app_root, release)
+
+    assert live.read_bytes() == before, "the database was changed with no way to check it"
+    assert "left exactly as it is" in result.stdout
+    assert "stub installer ran" in result.stdout, "the app files were not repaired either"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_that_cannot_take_a_safety_copy_goes_no_further(tmp_path: pathlib.Path) -> None:
+    """No copy, no restore and no reinstall -- only the message, and nothing changed."""
+    app_root, release = repair_install(tmp_path)
+    live = app_root / "data" / "housing.sqlite3"
+    board = Repository(live)
+    board.initialize()
+    board.upsert_listing(room("today"), ScoreResult(90, ["Fits"], "", {}))
+    (app_root / "backups").write_text("a file where the backups folder should be")
+    before = live.read_bytes()
+
+    result = run_repair(app_root, release)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "Nothing was changed" in result.stdout
+    assert "stub installer ran" not in result.stdout, "it went on to reinstall with no copy taken"
+    assert live.read_bytes() == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shell tools are macOS")
+def test_repair_on_a_healthy_board_keeps_what_is_still_in_its_write_ahead_log(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A snapshot taken by Repair must include writes not yet checkpointed."""
+    import sqlite3
+
+    app_root, release = repair_install(tmp_path)
+    live = app_root / "data" / "housing.sqlite3"
+    board = Repository(live)
+    board.initialize()
+    board.upsert_listing(room("checkpointed"), ScoreResult(90, ["Fits"], "", {}))
+    writer = sqlite3.connect(live)
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("UPDATE listings SET note = 'written a moment ago'")
+    writer.commit()
+    try:
+        assert run_repair(app_root, release).returncode == 0
+    finally:
+        writer.close()
+
+    snapshots = sorted((app_root / "backups").glob("housing-*.sqlite3"))
+    copy = sqlite3.connect(snapshots[-1])
+    try:
+        notes = [row[0] for row in copy.execute("SELECT note FROM listings")]
+    finally:
+        copy.close()
+    assert notes == ["written a moment ago"], "the safety copy lost what was only in the log"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import functools
 import io
 import json
 import logging
@@ -73,6 +74,10 @@ from .potrero import (
     preferred_count,
     shortlist,
 )
+from .classification import classify_listing
+from .rent_estimate import WINDOW_DAYS, RentTable, ranking_order
+from .scoring import score_listing
+from .rescore_marker import rescore_is_needed
 from .scanner import Scanner
 from .scheduling import (
     CATCH_UP_INTERVAL_MINUTES,
@@ -138,6 +143,33 @@ HOUSING_MODE_PATHS = (
 )
 
 
+# The tab for homes none of the deal's own tabs hold: a whole home whose size no
+# source stated, a card that could not be told from an office.
+OTHER_HOUSING_MODE = "other"
+# Views that are the user's own lists: every kind of home, whatever tab.
+CROSS_TAB_VIEWS = frozenset({"saved", "dismissed"})
+# How many homes one page shows. A year of listings put 30,000 homes on one
+# Archive page: 183MB of HTML, twenty seconds and 1.2GB of memory.
+PAGE_SIZE = 300
+# Views that grow with the board's history, read a page at a time in SQL. The
+# shortlist and its near misses are bounded by the deal and the 21-day
+# archive, and are put in order whole first: an estimated rent can move a home
+# across a page boundary.
+SQL_PAGED_VIEWS = frozenset({"all", "saved", "dismissed"})
+
+
+def page_number(value: object) -> int:
+    """A page asked for in a URL: a whole number from 1, anything else page 1.
+
+    Capped well past any real board, so a hand-typed page can never ask SQLite
+    to skip more rows than an integer holds; past the last page is the last.
+    """
+    try:
+        return min(1_000_000, max(1, int(str(value).strip())))
+    except ValueError:
+        return 1
+
+
 @dataclass(frozen=True)
 class ListingSelection:
     """The homes a set of filters picks out, and what those filters resolved to.
@@ -157,6 +189,45 @@ class ListingSelection:
     mode_unit_types: tuple[str, ...]
     area_priority: str
     enabled_housing_modes: list[str]
+    # Whether an estimated rent placed any unpriced home. When it did the
+    # rows are not in plain score order, and the page must not claim they are.
+    estimated_order: bool = False
+    # How many homes the view holds, and which ``PAGE_SIZE`` of them these
+    # are. ``listings`` is only the page: the rows on screen.
+    total: int = 0
+    page: int = 1
+
+    @property
+    def pages(self) -> int:
+        return max(1, -(-self.total // PAGE_SIZE))
+
+
+def _outside_tabs(enabled_housing_modes: list[str]) -> tuple[bool, tuple[str, ...]]:
+    """What the deal's own tabs cover, for the tab that holds everything else."""
+    return (
+        "room" in enabled_housing_modes,
+        tuple(mode for mode in enabled_housing_modes if mode != "room"),
+    )
+
+
+# One rent table per board state and day, so the shortlist does not rebuild
+# the medians on every page load. Small: it is one board, and a version that
+# moved is never asked for again. The day is part of the key because the
+# medians are over the last sixty days, which move with the calendar as well
+# as with the listings.
+_RENT_TABLES: dict[tuple, RentTable] = {}
+
+
+def _rent_table(repository: Repository) -> RentTable:
+    version = repository.board_version()
+    key = (str(repository.path), version, datetime.now(UTC).date())
+    table = _RENT_TABLES.get(key) if version is not None else None
+    if table is None:
+        table = RentTable.from_observations(repository.rent_observations(WINDOW_DAYS))
+        if version is not None:
+            _RENT_TABLES.clear()
+            _RENT_TABLES[key] = table
+    return table
 
 
 def select_listings(
@@ -170,8 +241,13 @@ def select_listings(
     housing: str = "room",
     area_priority: str = "",
     view: str = "active",
+    page: int = 1,
 ) -> ListingSelection:
-    """Resolve the dashboard's filters and read the homes they select."""
+    """Resolve the dashboard's filters and read the page of homes they select.
+
+    ``page`` counts from 1 in ``PAGE_SIZE`` homes; one past the end is the
+    last page, so a link kept while the board shrank still shows something.
+    """
     sort = sort if sort in VALID_SORTS else "score"
     view = view if view in VALID_VIEWS else "active"
     enabled_paths = set(preferences.deal_profile.enabled_paths)
@@ -185,38 +261,65 @@ def select_listings(
             enabled_housing_modes[0],
         )
     housing_mode = (
-        requested_mode if requested_mode in enabled_housing_modes else enabled_housing_modes[0]
+        requested_mode
+        if requested_mode in enabled_housing_modes or requested_mode == OTHER_HOUSING_MODE
+        else enabled_housing_modes[0]
     )
-    housing_kind = "room" if housing_mode == "room" else "whole_unit"
-    mode_unit_types = () if housing_mode == "room" else (housing_mode,)
+    housing_kind = (
+        "room" if housing_mode == "room"
+        else OTHER_HOUSING_MODE if housing_mode == OTHER_HOUSING_MODE
+        else "whole_unit"
+    )
+    mode_unit_types = () if housing_mode in {"room", OTHER_HOUSING_MODE} else (housing_mode,)
     selected_area_priority = (
         area_priority
         if housing_mode != "room" and area_priority in {"dream_strong", "secondary"}
         else ""
     )
-    listings = repository.query_listings(
+    # Starred and passed are the user's own lists, not a size's: a starred
+    # studio must not vanish because the one-bedroom tab is open.
+    cross_tab = view in CROSS_TAB_VIEWS
+    query = dict(
         minimum_score=preferences.minimum_score,
         sort=sort,
         neighborhood=neighborhood,
         platform=platform,
         home_style=home_style,
-        housing_kind=housing_kind,
+        housing_kind="" if cross_tab else housing_kind,
         # The tab is the size now, so a separate size dropdown would only be a
         # second way to say the same thing.
         unit_type="",
-        unit_types=mode_unit_types,
+        unit_types=() if cross_tab else mode_unit_types,
         view=view,
+        area_priority=selected_area_priority,
+        outside_tabs=_outside_tabs(enabled_housing_modes),
     )
-    if selected_area_priority == "dream_strong":
-        listings = [
-            listing
-            for listing in listings
-            if listing.get("neighborhood_priority") in {"dream", "strong"}
+    page = max(1, int(page))
+    estimated_order = False
+    if view in SQL_PAGED_VIEWS:
+        found = repository.query_page(**query, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE)
+        last = max(1, -(-found.total // PAGE_SIZE))
+        if page > last:
+            page = last
+            found = repository.query_page(**query, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE)
+        listings, total = found.rows, found.total
+    else:
+        listings = repository.query_listings(**query)
+        unpriced = [
+            int(item["id"]) for item in listings if item.get("price") is None and item.get("home_price") is None
         ]
-    elif selected_area_priority == "secondary":
-        listings = [
-            listing for listing in listings if listing.get("neighborhood_priority") == "secondary"
-        ]
+        if view == "active" and sort == "score" and unpriced:
+            # Ranking only: see rent_estimate. The rows are reordered; nothing
+            # in them changes, so the page and the CSV still say "Unknown".
+            listings, estimated_order = ranking_order(
+                listings,
+                repository.home_candidates(unpriced),
+                _rent_table(repository),
+                lambda listing: score_listing(classify_listing(listing), preferences),
+            )
+        total = len(listings)
+        page = min(page, max(1, -(-total // PAGE_SIZE)))
+        listings = listings[(page - 1) * PAGE_SIZE : page * PAGE_SIZE]
     return ListingSelection(
         listings=listings,
         sort=sort,
@@ -226,6 +329,9 @@ def select_listings(
         mode_unit_types=mode_unit_types,
         area_priority=selected_area_priority,
         enabled_housing_modes=enabled_housing_modes,
+        estimated_order=estimated_order,
+        total=total,
+        page=page,
     )
 
 
@@ -240,14 +346,22 @@ CSV_COLUMNS: tuple[tuple[str, str], ...] = (
     ("Neighborhood", "neighborhood"),
     ("Address", "title"),
     ("Building size", "building_units"),
-    ("Move-in", "availability_state"),
+    # The date the dashboard's own Move-in column shows. `availability_state`
+    # is a column nothing has ever written: every row in it reads "unknown", so
+    # the export carried a Move-in column that was "unknown" 139 times out of
+    # 139 while the page beside it named real dates.
+    ("Move-in", "available_on"),
     ("Source", "platform"),
     ("Link", "original_url"),
     ("First seen", "first_found"),
     ("Last seen", "last_seen"),
-    ("Status", "status"),
+    ("Status", "status_label"),
     ("Check", "concern"),
-    ("Note", "note"),
+    ("Note", "notes"),
+    # The home's other listing, when it disagrees with this one -- the same
+    # second row the page shows under it.
+    ("Other source", "other_source"),
+    ("Other price", "other_price"),
 )
 # Excel, Numbers and Sheets all read a leading =, +, - or @ as the start of a
 # formula. Listing titles and notes are text this app did not write, so a title
@@ -274,8 +388,28 @@ def listings_csv(listings: list[dict]) -> str:
     writer = csv.writer(buffer, lineterminator="\r\n")
     writer.writerow([heading for heading, _ in CSV_COLUMNS])
     for listing in listings:
-        writer.writerow([_csv_cell(listing.get(key)) for _, key in CSV_COLUMNS])
+        row = _csv_values(listing)
+        writer.writerow([_csv_cell(row.get(key)) for _, key in CSV_COLUMNS])
     return buffer.getvalue()
+
+
+def _csv_values(listing: dict) -> dict:
+    """A page row as the spreadsheet states it."""
+    other = listing.get("other_copy") or {}
+    notes = [str(listing.get("note") or "").strip()] + [
+        f"{entry['platform']}: {entry['note'].strip()}" for entry in listing.get("other_notes") or []
+    ]
+    return {
+        **listing,
+        "status_label": (
+            "aged out"
+            if listing.get("status") == "dismissed" and listing.get("status_reason") == "aged"
+            else listing.get("status")
+        ),
+        "notes": " | ".join(note for note in notes if note),
+        "other_source": other.get("platform"),
+        "other_price": other.get("price"),
+    }
 
 
 def _reveal_folder(folder: Path) -> bool:
@@ -702,8 +836,24 @@ def create_app(
     # one, is what makes reopening the app the recovery the Ready Check
     # already tells people it is.
     scanner.recover_interrupted_scans()
+    # Re-ranking the whole board here is what the dashboard used to wait on:
+    # twelve seconds on an idle machine with 8,680 homes, approaching fifty on
+    # a busy one, on every start rather than only after somebody changed their
+    # deal. Scoring is a pure function of a listing and a deal, so a board
+    # already scored by this code with these answers cannot score differently
+    # now, and the pass is skipped. Anything unknown -- no mark, a damaged one,
+    # a source tree that cannot be hashed -- scores again, which is what this
+    # did unconditionally before.
     if initial_preferences.profile_active:
-        scanner.rescore_all(initial_preferences)
+        if rescore_is_needed(repository, initial_preferences):
+            scanner.rescore_all(initial_preferences)
+        else:
+            # Said out loud because the skip is otherwise invisible, and "why is
+            # my shortlist ranked like that" is answered first by whether this
+            # start re-ranked the board or trusted the mark it already carried.
+            logging.getLogger(__name__).info(
+                "Start-up re-ranking skipped: the board is already scored by this code with this deal"
+            )
     def look_for_a_newer_release():
         # Bound to this install's own data directory rather than reading the
         # environment again, so an isolated validation install checks and
@@ -828,7 +978,25 @@ def create_app(
     templates.env.filters["compact_pacific_date"] = _compact_pacific_date
     templates.env.filters["compact_move_in_date"] = _compact_move_in_date
 
+    def one_connection(endpoint):
+        """Answer a page's questions to the board from one connection.
+
+        The dashboard asked 29 of them and opened a connection for each (see
+        ``Repository.reusing_one_connection``). Inside the route, not around
+        it: a plain route runs whole on one worker thread, template included,
+        and that thread is what the connection belongs to. Async routes and
+        everything the scheduler runs keep a connection per question.
+        """
+
+        @functools.wraps(endpoint)
+        def answer(*args, **kwargs):
+            with repository.reusing_one_connection():
+                return endpoint(*args, **kwargs)
+
+        return answer
+
     @application.get("/", response_class=HTMLResponse)
+    @one_connection
     def dashboard(
         request: Request,
         sort: str = "score",
@@ -841,6 +1009,7 @@ def create_app(
         view: str = "active",
         message: str = "",
         scan: str = "",
+        page: str = "1",
     ):
         preferences = load_preferences(active_settings.preferences_path)
         if not preferences.profile_active:
@@ -856,6 +1025,7 @@ def create_app(
             housing=housing,
             area_priority=area_priority,
             view=view,
+            page=page_number(page),
         )
         sort = selection.sort
         view = selection.view
@@ -883,13 +1053,26 @@ def create_app(
         # listings than this" is the right instinct, and the answer is almost
         # never that a source broke -- it is which limit is costing what, which
         # the page had no way of saying.
-        if view == "active":
+        if view == "active" and housing_mode != OTHER_HOUSING_MODE:
             exclusion_summary = repository.exclusion_summary(
                 preferences.minimum_score, housing_kind, mode_unit_types
             )
+        cross_tab = view in CROSS_TAB_VIEWS
+        outside_tabs = _outside_tabs(enabled_housing_modes)
         option_minimum = preferences.minimum_score if view == "active" else 0
         neighborhoods, stored_platforms = repository.filter_options(
-            option_minimum, housing_kind, mode_unit_types
+            option_minimum,
+            "" if cross_tab else housing_kind,
+            () if cross_tab else mode_unit_types,
+            outside_tabs,
+        )
+        # The tab for everything else appears only when it holds something
+        # here, or is the tab being read.
+        show_other_tab = housing_mode == OTHER_HOUSING_MODE or (
+            not cross_tab
+            and repository.has_homes(
+                preferences.minimum_score, view, OTHER_HOUSING_MODE, outside_tabs
+            )
         )
         # A source selector is also a way to inspect whether a connected source has
         # found anything yet. Keep configured sources visible even when every one of
@@ -950,7 +1133,16 @@ def create_app(
             view_query_parts.append(f"unit_type={quote(selected_unit_type)}")
         if selected_area_priority:
             view_query_parts.append(f"area_priority={quote(selected_area_priority)}")
-        return_to = "/?" + "&".join([f"sort={quote(sort)}", *view_query_parts])
+        page_base = "/?" + "&".join([f"sort={quote(sort)}", *view_query_parts])
+        # Back to this page of the view, not its first: a home starred on page
+        # three returns you to page three.
+        return_to = page_base + (f"&page={selection.page}" if selection.page > 1 else "")
+        # Every page of this view, in this order; a new order or filter starts
+        # again at the first.
+        page_urls = {
+            "previous": f"{page_base}&page={selection.page - 1}" if selection.page > 1 else None,
+            "next": f"{page_base}&page={selection.page + 1}" if selection.page < selection.pages else None,
+        }
         sort_urls = {
             sort_name: "/?" + "&".join([f"sort={sort_name}", *view_query_parts])
             for sort_name in ("score", "contact", "price", "available", "newest", "unopened")
@@ -1017,10 +1209,19 @@ def create_app(
                 "sort_urls": sort_urls,
                 "exclusion_summary": exclusion_summary,
                 "excluded_total": sum(int(item["count"]) for item in exclusion_summary),
+                "cross_tab": cross_tab,
+                "show_other_tab": show_other_tab,
+                "estimated_order": selection.estimated_order,
+                "total_homes": selection.total,
+                "page": selection.page,
+                "pages": selection.pages,
+                "first_on_page": (selection.page - 1) * PAGE_SIZE + 1,
+                "page_urls": page_urls,
             },
         )
 
     @application.get("/listings.csv")
+    @one_connection
     def listings_download(
         sort: str = "score",
         neighborhood: str = "",
@@ -1030,13 +1231,15 @@ def create_app(
         unit_type: str = "",
         area_priority: str = "",
         view: str = "active",
+        page: str = "1",
     ):
         """The homes on screen, as a spreadsheet.
 
         Takes the dashboard's own parameters and runs the dashboard's own
-        selection, so the file holds the rows the page was showing. A GET
-        because it is a read and a link the browser can simply follow; the
-        same-origin guard exists for the routes that change something.
+        selection, so the file holds the rows the page was showing -- the page
+        of them, as the page does. A GET because it is a read and a link the
+        browser can simply follow; the same-origin guard exists for the routes
+        that change something.
         """
         preferences = load_preferences(active_settings.preferences_path)
         if not preferences.profile_active:
@@ -1051,6 +1254,7 @@ def create_app(
             housing=housing,
             area_priority=area_priority,
             view=view,
+            page=page_number(page),
         )
         # Named for the day it was taken, because these get saved and compared.
         stamp = datetime.now(UTC).astimezone(PACIFIC).date().isoformat()
@@ -1110,18 +1314,43 @@ def create_app(
             },
         )
 
+    def score_again(listing_id: int) -> None:
+        """Score a home the archive had aged out, now it is back in play.
+
+        Such a home was not rescored with the rest when the deal last changed
+        (see ``Repository.live_candidates``). Never at the cost of what the
+        user just did: that is already saved. If the scoring fails, the board
+        no longer claims to be scored -- the mark is taken back, so the next
+        start scores every home in play, this one with them.
+        """
+        try:
+            scanner.rescore_home(listing_id)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Could not score listing %s against the current deal", listing_id, exc_info=True
+            )
+            try:
+                with repository.connection() as connection:
+                    repository.set_scoring_mark(connection, None)
+                    connection.commit()
+            except Exception:
+                logging.getLogger(__name__).warning("Could not take back the scoring mark", exc_info=True)
+
     @application.post("/listings/{listing_id}/status")
     def listing_status(
         listing_id: int,
         status: str = Form(...),
         return_to: str = Form("/"),
     ):
+        aged_out = repository.home_is_aged_out(listing_id)
         try:
             updated = repository.set_listing_status(listing_id, status)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not updated:
             raise HTTPException(status_code=404, detail="Listing not found")
+        if aged_out:
+            score_again(listing_id)
         return RedirectResponse(_safe_return(return_to), status_code=303)
 
     @application.post("/listings/{listing_id}/note")
@@ -1132,8 +1361,12 @@ def create_app(
     ):
         if len(note) > 4000:
             raise HTTPException(status_code=400, detail="Note must be 4,000 characters or fewer")
+        aged_out = repository.home_is_aged_out(listing_id)
         if not repository.set_listing_note(listing_id, note.strip()):
             raise HTTPException(status_code=404, detail="Listing not found")
+        # Only a note brings an aged-out home back (see set_listing_note).
+        if aged_out and note.strip():
+            score_again(listing_id)
         return RedirectResponse(_safe_return(return_to), status_code=303)
 
     @application.post("/listings/{listing_id}/opened", status_code=204)
@@ -1143,6 +1376,7 @@ def create_app(
         return Response(status_code=204)
 
     @application.get("/listings/{listing_id}", response_class=HTMLResponse)
+    @one_connection
     def listing_detail(request: Request, listing_id: int):
         """One home on its own page.
 
@@ -1176,10 +1410,9 @@ def create_app(
                 "back_to": origin,
                 "back_label": back_labels.get(origin_view, "Back to the shortlist"),
                 "view": origin_view,
-                # What the other sources say about this same building. One
-                # source is a lead; a second is corroboration, and often a rent
-                # the first one never published.
-                "corroborations": repository.corroborations(listing_id),
+                # This home on other sites, and the other sites listing homes
+                # at its address -- two questions, see Repository.elsewhere.
+                "elsewhere": repository.elsewhere(listing_id),
             },
         )
 
@@ -1206,30 +1439,27 @@ def create_app(
             "neighborhood_options": SF_NEIGHBORHOODS,
             "minimum_score": preferences.minimum_score,
             # What each stop on the slider would actually put on the shortlist,
-            # so the number means something while it is being dragged.
-            # Only the home shapes this deal actually shows, so the number under
-            # the slider is the number of rows the tabs will hold.
-            "shortlist_counts": _counts_for_deal_page(
-                CUTOFF_STOPS,
-                kinds=sorted(
-                    {
-                        "room" if path == "private_room" else "whole_unit"
-                        for path in preferences.deal_profile.enabled_paths
-                    }
-                ),
-            ),
+            # so the number means something while it is being dragged. Every
+            # tab's homes, the Other homes tab's included: each shortlisted
+            # home is on exactly one of them, so the number under the slider
+            # is the number of homes the tabs hold between them.
+            "shortlist_counts": _counts_for_deal_page(CUTOFF_STOPS),
             "cutoff_stops": CUTOFF_STOPS,
             "message": message,
             "error": error,
             "welcome": welcome or not preferences.profile_active,
-            # Saving a deal reranks every stored home before the page can
-            # answer, and on a full pool that is a wait with nothing on screen.
-            # The count is what makes the wait explicable rather than merely
-            # long, so it is read here rather than guessed at in the browser.
+            # Saving a deal reranks every home still in play before the page
+            # can answer, and on a full pool that is a wait with nothing on
+            # screen. The count is what makes the wait explicable rather than
+            # merely long, so it is read here rather than guessed at in the
+            # browser -- and it is the homes the save will score, not every
+            # row: a year of aged-out homes is not rescored until restored.
             "stored_listing_count": repository.count_listings(),
+            "rescored_listing_count": repository.count_live_listings(),
         }
 
     @application.get("/preferences", response_class=HTMLResponse)
+    @one_connection
     def preferences_page(
         request: Request,
         message: str = "",
@@ -1304,13 +1534,13 @@ def create_app(
             status_code=303,
         )
 
-    def _counts_for_deal_page(thresholds, kinds):
+    def _counts_for_deal_page(thresholds):
         """What each cut-off would shortlist, or what it usually would.
 
         Before the first search there is nothing stored, and a page of noughts
         reads as a verdict on the deal rather than on the empty database.
         """
-        counts = repository.shortlist_counts(thresholds, kinds=kinds)
+        counts = repository.shortlist_counts(thresholds)
         if any(counts.values()):
             return counts
         preferences = load_preferences(active_settings.preferences_path)
@@ -1333,17 +1563,10 @@ def create_app(
 
         def measure() -> ShortlistEstimate:
             draft = preferences_with_deal(profile, current)
-            # Only the home shapes this deal shows, the same narrowing the
-            # tabs do, so the number is the number of rows they will hold.
-            kinds = sorted(
-                {
-                    "room" if path == "private_room" else "whole_unit"
-                    for path in profile.enabled_paths
-                }
-            )
-            return estimate_shortlist_counts(
-                repository, draft, CUTOFF_STOPS, kinds=kinds
-            )
+            # Every home, scored against the draft: what the draft rules out
+            # it rules out itself, and whatever it lets through is on one of
+            # its tabs -- the Other homes tab holds what no size tab does.
+            return estimate_shortlist_counts(repository, draft, CUTOFF_STOPS)
 
         # Scoring the pool is a third of a second of solid CPU. Run inline it
         # would hold the event loop for that long on every keystroke, and the
@@ -1612,6 +1835,7 @@ def create_app(
         )
 
     @application.get("/alerts", response_class=HTMLResponse)
+    @one_connection
     def alerts_page(request: Request, message: str = "", error: str = ""):
         preferences = load_preferences(active_settings.preferences_path)
         if not preferences.profile_active:
@@ -1643,12 +1867,24 @@ def create_app(
         # actor, so it is setup, not one of the ones that just run.
         # Shown in the order that sells them rather than the order they are
         # read in: scan order is chosen for speed and reads as a jumble.
-        no_setup_sources = showcase_sorted(
-            source.platform
+        no_setup_running = [
+            source
             for source in active_sources
             if getattr(source, "mode", "") == "automatic"
             and not getattr(source, "connector_key", None)
-        )
+        ]
+        no_setup_sources = showcase_sorted(source.platform for source in no_setup_running)
+        # "Eighteen sources already work" was a count of what is configured, so
+        # a source that had delivered nothing for nine days kept its place in
+        # the list with a tick beside it and nothing to say otherwise. The chip
+        # carries the same derived freshness the Support page reads, so a source
+        # that has gone quiet says so where it is being claimed.
+        quiet_sources = {
+            source.platform
+            for source in no_setup_running
+            if evaluate_source_freshness(repository, source).status
+            in {"stale", "backoff", "attention"}
+        }
         # Facebook has its own block further down the page, and appearing in both
         # places read as a mistake rather than as two routes to the same thing.
         # The alert reader is untouched: if Facebook's own Notify me mail lands
@@ -1707,6 +1943,7 @@ def create_app(
                 # email-only rather than from the connector-key constant.
                 "email_providers": [provider["name"] for provider in gmail_providers],
                 "no_setup_sources": no_setup_sources,
+                "quiet_sources": quiet_sources,
                 "no_setup_count_word": spelled_count(len(no_setup_sources)),
                 "apify_state": connector_states.get("apify"),
                 "furnished_finder_state": connector_states.get("furnished_finder"),
@@ -1746,6 +1983,7 @@ def create_app(
         )
 
     @application.get("/support", response_class=HTMLResponse)
+    @one_connection
     def support_page(request: Request, probe: int = 0, message: str = "", error: str = ""):
         report = support_report(request, include_connectivity=bool(probe))
         return templates.TemplateResponse(
@@ -1802,6 +2040,7 @@ def create_app(
         )
 
     @application.get("/support/report.json")
+    @one_connection
     def support_report_json(request: Request):
         return JSONResponse(support_report(request).to_dict())
 

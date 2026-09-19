@@ -92,6 +92,7 @@ New-Item -ItemType Directory -Force -Path $DataDir, $LogDir, $ToolsDir, (Join-Pa
 
 $stage = Join-Path $AppRoot ('.install.' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
+$restartIfStopped = $false
 try {
   if (-not (Test-Path -LiteralPath $UvExe)) {
     Write-Host 'Downloading the verified private runtime bootstrap...'
@@ -106,7 +107,10 @@ try {
   }
 
   if (Test-HealthyMonitor) {
-    & schtasks.exe /End /TN $TaskName 2>$null | Out-Null
+    # In its own scope with Continue: Windows PowerShell 5.1 turns anything
+    # schtasks.exe says on stderr into a terminating error under Stop.
+    & { $ErrorActionPreference = 'Continue'; & schtasks.exe /End /TN $TaskName 2>$null | Out-Null }
+    $restartIfStopped = $true
     # Waited two seconds and hoped. schtasks /End asks a process to stop
     # rather than waiting for it to have stopped, and Windows will not delete
     # a file that is open -- so an upgrade begun while the app was still
@@ -141,11 +145,35 @@ try {
   & $stagePython -I -c "import sf_housing; assert sf_housing.__version__ == '$Version'"
   if ($LASTEXITCODE -ne 0) { Fail 'the installed app did not pass its version check.' }
 
-  if ((Test-Path -LiteralPath (Join-Path $DataDir 'housing.sqlite3')) -and (Test-Path -LiteralPath (Join-Path $RuntimeTarget 'Scripts\python.exe'))) {
-    $backupDir = Join-Path $AppRoot 'backups'
-    New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    & (Join-Path $RuntimeTarget 'Scripts\python.exe') -c "import sqlite3,sys; source=sqlite3.connect(sys.argv[1]); target=sqlite3.connect(sys.argv[2]); source.backup(target); target.close(); source.close()" (Join-Path $DataDir 'housing.sqlite3') (Join-Path $backupDir "housing-$stamp.sqlite3")
+  # A safety copy of the housing database before anything is replaced, and the
+  # backups folder kept to a bounded size -- by sf_housing/backups.py, the same
+  # rules both Repairs and the macOS installer run. It used to be a one-line
+  # copy with the old runtime's Python whose exit code nobody read: skipped
+  # when that runtime was the thing broken, which is exactly when people
+  # reinstall; carried on regardless when the copy failed; and never pruned,
+  # so every install added a full-size copy for good. With the new runtime's
+  # Python, which has just been proved to work; a copy that cannot be taken
+  # stops the install here, before the old version is touched.
+  if (Test-Path -LiteralPath (Join-Path $DataDir 'housing.sqlite3')) {
+    & $stagePython -I -m sf_housing.backups protect $AppRoot
+    if ($LASTEXITCODE -ne 0) { Fail 'your housing data could not be backed up first, so nothing was changed. The reason is above; free some disk space if it says the disk is full, then run Install again.' }
+  }
+
+  # Start-up skips re-ranking when the board carries a mark saying this code and
+  # this deal already scored it. A version that predates that mark cannot
+  # maintain it, so installing an older release, letting it re-score under its
+  # own rules and coming back would leave this one trusting the other's scores.
+  # Retracted on every install, which is the one point either version runs. The
+  # old app has already been stopped above, so nothing holds the write lock; the
+  # new runtime's Python is used because it has just been proved to work, where
+  # the old one may not exist at all, run isolated so no PYTHONPATH can break
+  # it. The macOS installer does the same. Never fatal: a mark left in place
+  # matters only after a downgrade and back, and failing an install over it
+  # would cost more than it saves.
+  if (Test-Path -LiteralPath (Join-Path $DataDir 'housing.sqlite3')) {
+    try {
+      & $stagePython -I -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1], timeout=30); c.execute('DELETE FROM scoring_state WHERE name = ?', ('rescore_fingerprint',)); c.commit(); c.close()" (Join-Path $DataDir 'housing.sqlite3') 2>$null
+    } catch { }
   }
 
   if (Test-Path -LiteralPath $RuntimeTarget) {
@@ -197,6 +225,7 @@ try {
   } catch {
     Write-Host 'Note: Windows kept its default power settings for the startup task. The app still runs; it may pause on battery.'
   }
+  $restartIfStopped = $false
   & schtasks.exe /Run /TN $TaskName | Out-Null
   if ($LASTEXITCODE -ne 0 -or -not (Wait-ForMonitor)) { Fail "the local dashboard did not become healthy. Run Repair; details are in $LogDir." }
   Write-Host "Installed. Your profile and history stay in: $DataDir"
@@ -211,4 +240,15 @@ try {
   }
 } finally {
   if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+  # An install that stopped the running app and then failed -- no internet for
+  # the runtime, no safety copy of the data, a file Windows would not let go of
+  # -- left it off until the next sign-in. Every failure before the swap leaves
+  # the old version in place, so it is started again; after the swap, starting
+  # whatever is there is still better than nothing running. Quietly, because
+  # Windows PowerShell 5.1 turns a schtasks.exe complaint on stderr into an
+  # error here, and this must never hide the failure that brought us here.
+  if ($restartIfStopped) {
+    $ErrorActionPreference = 'Continue'
+    & schtasks.exe /Run /TN $TaskName 2>$null | Out-Null
+  }
 }

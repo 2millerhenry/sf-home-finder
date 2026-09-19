@@ -137,3 +137,32 @@ def test_a_scanner_with_no_limit_wired_in_is_unlimited(repository) -> None:
     scanner = Scanner(repository, lambda: parse_preferences(TEST_PREFERENCES), [])
 
     assert scanner._within_daily_budget("manual", sources=None) is True
+
+
+def test_a_check_that_reached_nothing_because_the_laptop_was_offline_is_not_spent() -> None:
+    """An outage spent the day's one check without sending a single request.
+
+    The budget exists so the sites this reads are not hammered, and a scan run
+    with the wifi off asks them nothing at all -- every source fails in the
+    resolver, before a socket is opened. Counting it meant somebody who pressed
+    the button on a train, or behind a captive portal, was told "You have had
+    your check for today" once they were back online, and had no way to refresh
+    until the next clocked check hours later.
+
+    A scan that was merely turned away is different and still spends: a 403 is
+    a request that arrived, and refusals are what a block is built out of.
+    """
+    offline = ran(9, "manual")
+    offline["sources_reached"] = 0
+
+    assert manual_scans_today([offline], NOON) == 0
+    assert manual_scan_allowed([offline], "manual", NOON) is True
+
+
+def test_a_check_the_sites_turned_away_still_spends_the_day() -> None:
+    """Being blocked is still contact, and is exactly what the limit is for."""
+    blocked = ran(9, "manual")
+    blocked["sources_reached"] = 3
+
+    assert manual_scans_today([blocked], NOON) == 1
+    assert manual_scan_allowed([blocked], "manual", NOON) is False

@@ -300,7 +300,8 @@ def measure_recheck_allowance(
 
     def lane_search(client):
         time.sleep(lane_seconds)
-        ended["at"] = time.monotonic()
+        # On the scanner's own clock, which the deadlines are measured on.
+        ended["at"] = scanner._clock()
 
     lane = LaneStub("Lane", search=lane_search)
     main = Stub("Main")
@@ -314,9 +315,9 @@ def measure_recheck_allowance(
         deadlines.setdefault(source.platform, []).append(kwargs["deadline"])
         return original(client, source, preferences, **kwargs)
 
-    def spy_search(source, client, preferences, trigger, *, deadline):
+    def spy_search(source, client, preferences, trigger, *, deadline, budget):
         deadlines.setdefault(source.platform, []).insert(0, deadline)
-        return original_search(source, client, preferences, trigger, deadline=deadline)
+        return original_search(source, client, preferences, trigger, deadline=deadline, budget=budget)
 
     scanner._recheck_absent = spy
     scanner._search_within_ceiling = spy_search
@@ -386,9 +387,9 @@ def test_once_the_lane_is_over_the_shift_is_exactly_its_time(
     original_search = scanner._search_within_ceiling
     original_recheck = scanner._recheck_absent
 
-    def spy_search(source, client, preferences, trigger, *, deadline):
+    def spy_search(source, client, preferences, trigger, *, deadline, budget):
         searched[source.platform] = deadline
-        return original_search(source, client, preferences, trigger, deadline=deadline)
+        return original_search(source, client, preferences, trigger, deadline=deadline, budget=budget)
 
     def spy_recheck(client, source, preferences, **kwargs):
         rechecked[source.platform] = kwargs["deadline"]
@@ -418,9 +419,9 @@ def test_a_sequential_scan_hands_every_source_the_real_deadline(
     original_search = scanner._search_within_ceiling
     original_recheck = scanner._recheck_absent
 
-    def spy_search(source, client, preferences, trigger, *, deadline):
+    def spy_search(source, client, preferences, trigger, *, deadline, budget):
         searched[source.platform] = deadline
-        return original_search(source, client, preferences, trigger, deadline=deadline)
+        return original_search(source, client, preferences, trigger, deadline=deadline, budget=budget)
 
     def spy_recheck(client, source, preferences, **kwargs):
         rechecked[source.platform] = kwargs["deadline"]

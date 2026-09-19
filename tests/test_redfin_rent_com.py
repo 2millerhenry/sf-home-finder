@@ -14,6 +14,7 @@ import json
 import re
 from pathlib import Path
 
+import httpx
 import pytest
 import yaml
 
@@ -141,6 +142,88 @@ def test_the_202_message_names_the_status_it_saw(preferences) -> None:
     with pytest.raises(SourceError) as caught:
         RedfinSource().search(FakeClient(FakeResponse("", 202)), preferences)
     assert "202" in str(caught.value)
+
+
+def test_a_refusal_part_way_through_keeps_the_pages_already_read() -> None:
+    """Redfin delivered nothing for nine days while its pages were answering.
+
+    Its search is a six-page walk, and the real install's log shows the same
+    shape on every attempt: pages 1-3 answered HTTP 200 and page 4 answered
+    202. Not one refusal on record was on the first page. Raising there threw
+    three pages of San Francisco homes away, recorded the source as failed, and
+    two of those pushed it into a 24-hour backoff -- so the source that was
+    working was reported as broken and delivered nothing at all.
+
+    A refusal on the first page still raises: a source that really is blocked
+    must still be reported as blocked rather than as a quiet zero.
+    """
+    preferences = profile("one_bedroom")
+    whole_page = RedfinSource().search(FakeClient(FakeResponse(redfin_page())), preferences)
+    assert whole_page, "the fixture should yield homes"
+
+    client = FakeClient(FakeResponse(redfin_page()), FakeResponse("", 202))
+    kept = RedfinSource().search(client, preferences)
+    assert len(kept) == len(whole_page)
+
+    with pytest.raises(SourceError):
+        RedfinSource().search(FakeClient(FakeResponse("", 202)), preferences)
+
+
+class FailingAfter(FakeClient):
+    """Serves its pages once each, then fails the next request as ``failure`` says."""
+
+    def __init__(self, failure: str, *pages: FakeResponse):
+        super().__init__(*pages)
+        self.failure = failure
+
+    def get(self, url, **kwargs):
+        if len(self.requested) < len(self.pages):
+            return super().get(url, **kwargs)
+        self.requested.append(url)
+        request = httpx.Request("GET", url)
+        if self.failure == "timeout":
+            raise httpx.ReadTimeout("The read operation timed out", request=request)
+        if self.failure == "dropped":
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=request)
+        return FakeResponse("", int(self.failure))
+
+
+@pytest.mark.parametrize("failure", ["timeout", "dropped", "404", "400"])
+def test_a_later_page_that_times_out_drops_or_is_missing_keeps_the_pages_already_read(failure: str) -> None:
+    """Pre-launch audit: the guard above kept the pages read before a
+    refusal, but a later page that timed out, dropped the connection or
+    answered 400/404/410 still threw them all away and counted a failure
+    towards pausing the source -- on all seven paginated sources."""
+    preferences = profile("one_bedroom")
+    whole_page = RedfinSource().search(FakeClient(FakeResponse(redfin_page())), preferences)
+
+    kept = RedfinSource().search(FailingAfter(failure, FakeResponse(redfin_page())), preferences)
+
+    assert len(kept) == len(whole_page)
+
+
+def test_a_first_page_the_site_does_not_have_is_said_in_words() -> None:
+    """A 404 on the first page reached the page as httpx's own text, MDN link
+    and all, where every other refusal is said in words."""
+    with pytest.raises(SourceError) as caught:
+        RedfinSource().search(FakeClient(FakeResponse("", 404)), profile("one_bedroom"))
+
+    assert "404" in str(caught.value)
+    assert "developer.mozilla" not in str(caught.value)
+
+
+def test_every_paginated_source_keeps_its_pages_the_same_way() -> None:
+    """The seven paginated sources each carry a copy of one guard (the
+    PARTIAL_WALK note in sf_housing/sources.py); Redfin's is proved above.
+    This holds every copy to the same catch, so none falls back to keeping
+    its pages after a refusal alone."""
+    from sf_housing import sources
+
+    text = Path(sources.__file__).read_text(encoding="utf-8")
+    guard = r"\n\s+if (?:read_a_card|answered):"
+
+    assert re.findall(r"except SourceError:" + guard, text) == []
+    assert len(re.findall(r"except \(SourceError, httpx\.TransportError\):" + guard, text)) == 7
 
 
 @pytest.mark.parametrize(
