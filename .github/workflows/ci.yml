@@ -37,9 +37,13 @@ jobs:
           version: "0.10.8"
       - name: Run the suite
         # On the Python the release actually ships, which is 3.12, not whatever
-        # the runner happens to have newest. pytest is an optional extra here,
-        # so it has to be asked for by name.
-        run: uv run --python 3.12 --extra test pytest
+        # the runner happens to have newest -- and uv's own build of it, as the
+        # installer gives the app, never the runner's python.org one. That
+        # one's python hands off to a second binary inside Python.app, so a
+        # stand-in for the running app loses the name and path Repair finds
+        # the app by. pytest is an optional extra here, so it has to be asked
+        # for by name.
+        run: uv run --managed-python --python 3.12 --extra test pytest
 
   macos-install:
     name: macOS install, end to end
