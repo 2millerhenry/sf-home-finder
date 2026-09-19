@@ -34,8 +34,37 @@ def main() -> None:
         # installer's own visible step rather than silence from an app that
         # looks like it failed to start; the service then starts in three and
         # a half seconds.
+        # Progress worth printing, rather than a bar that moves on a timer.
+        # Almost all of this is the import: macOS vetting libraries it has not
+        # seen and Python compiling them, neither of which reports anything.
+        # What can be counted is how many modules have been asked for, and a
+        # start-up asks for a stable number of them -- 870 when this was
+        # written. Counting them is honest about where the time goes, and an
+        # import that asks for more is simply held at 99 until it is done.
+        import sys
+
+        class _Counted:
+            """A finder that only counts. It answers None, so the real ones
+            still do the finding."""
+
+            expected = 870
+
+            def __init__(self) -> None:
+                self.seen = 0
+                self.said = -1
+
+            def find_spec(self, name, path=None, target=None):
+                self.seen += 1
+                percent = min(99, self.seen * 100 // self.expected)
+                if percent != self.said:
+                    self.said = percent
+                    print(f"PROGRESS {percent}", flush=True)
+                return None
+
+        sys.meta_path.insert(0, _Counted())
         from . import app as _started  # noqa: F401
 
+        print("PROGRESS 100", flush=True)
         raise SystemExit(0)
 
     if args.command == "scan":

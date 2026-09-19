@@ -450,7 +450,6 @@ def test_the_shortlist_is_ordered_whole_before_it_is_cut(tmp_path: Path, monkeyp
         monkeypatch.setattr("sf_housing.app.PAGE_SIZE", 10_000)
         whole = shown(client.get("/?housing=room&view=active&sort=score").text)
 
-    assert "placed by what similar homes nearby rent for" in first
     assert lifted in shown(first) and lifted not in shown(second)
     assert shown(first) + shown(second) == whole
     assert sorted(whole) == sorted([*priced, lifted])

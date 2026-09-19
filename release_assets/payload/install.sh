@@ -3,7 +3,7 @@ set -euo pipefail
 
 RELEASE_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 PAYLOAD_DIR="$RELEASE_ROOT/payload"
-VERSION="0.5.8"
+VERSION="0.5.9"
 PYTHON_VERSION="3.12.10"
 PORT="${SF_HOUSING_PORT:-8000}"
 APP_ROOT="${SF_HOUSING_APP_ROOT:-$HOME/Library/Application Support/SF Housing Monitor}"
@@ -26,7 +26,7 @@ RUNTIMES_DIR="$APP_ROOT/runtimes"
 RELEASES_DIR="$APP_ROOT/releases"
 UV_BIN="$PAYLOAD_DIR/uv"
 LOCK_FILE="$PAYLOAD_DIR/requirements.lock"
-WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.8-py3-none-any.whl"
+WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.9-py3-none-any.whl"
 
 say() { printf '%s\n' "$*"; }
 fail() { say "Installation stopped: $*"; exit 1; }
@@ -44,7 +44,7 @@ STEP_PID=""
 STEP_LOG=""
 step() {
   local label=$1 limit=$2; shift 2
-  local started rc=0 i=0 elapsed=0
+  local started rc=0 i=0 elapsed=0 percent=
   : >"$STEP_LOG"
   started=$(/bin/date +%s)
   if [ -t 1 ]; then
@@ -57,7 +57,14 @@ step() {
         rc=124
         break
       fi
-      printf '\r\033[K  %-34s %s  %ss' "$label" "${SPIN[$((i % 10))]}" "$elapsed"
+      # A step that knows how far along it is says so; one that does not
+      # shows the time it has taken, which is the only honest thing left.
+      percent=$(/usr/bin/tail -3 "$STEP_LOG" 2>/dev/null | /usr/bin/sed -n 's/^PROGRESS \([0-9]*\)$/\1/p' | /usr/bin/tail -1)
+      if [ -n "$percent" ]; then
+        printf '\r\033[K  %-34s %s  %3s%%  %ss' "$label" "${SPIN[$((i % 10))]}" "$percent" "$elapsed"
+      else
+        printf '\r\033[K  %-34s %s  %ss' "$label" "${SPIN[$((i % 10))]}" "$elapsed"
+      fi
       i=$((i + 1))
       /bin/sleep 0.12
     done
@@ -73,7 +80,7 @@ step() {
     say "  $label..."
     "$@" >"$STEP_LOG" 2>&1 || rc=$?
   fi
-  if [ "$rc" != 0 ] && [ -s "$STEP_LOG" ]; then /usr/bin/tail -6 "$STEP_LOG" || true; fi
+  if [ "$rc" != 0 ] && [ -s "$STEP_LOG" ]; then /usr/bin/grep -v '^PROGRESS ' "$STEP_LOG" | /usr/bin/tail -6 || true; fi
   return "$rc"
 }
 
@@ -145,7 +152,7 @@ step "Downloading the libraries it needs" 1800 \
   "$UV_BIN" pip sync "$LOCK_FILE" --python "$STAGE/runtime/bin/python" --strict --compile-bytecode || fail "$UV_FAILED"
 step "Installing SF Home Finder" 600 \
   "$UV_BIN" pip install "$WHEEL_FILE" --python "$STAGE/runtime/bin/python" --no-deps --quiet --compile-bytecode || fail "$UV_FAILED"
-"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.8"' ||
+"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.9"' ||
   fail "the installed app did not pass its version check. Download the ZIP again."
 
 # A safety copy of the housing database before anything is replaced, and the

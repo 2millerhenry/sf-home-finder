@@ -121,10 +121,10 @@
         </div>
       </div>
       </div>
-      <p class="field-help">
-        Tick a home type to use its budget. Untouched rows are ignored entirely.
-        A home at or under your ideal ranks above one that merely fits the maximum; leave it blank and only the maximum is used.
-        <button type="button" class="link-button" data-ranges-toggle aria-expanded="{{ 'true' if ranges_in_use else 'false' }}">
+      <p class="field-help budget-help">
+        Tick a home type to use its budget; untouched rows are ignored. A home at
+        or under your ideal ranks above one that only fits the maximum.
+        <button type="button" class="link-button budget-toggle" data-ranges-toggle aria-expanded="{{ 'true' if ranges_in_use else 'false' }}">
           {% if ranges_in_use %}Hide price ranges{% else %}Add a price range{% endif %}
         </button>
       </p>
@@ -157,7 +157,7 @@
           </select>
           <ul class="area-selected" data-area-selected aria-label="Selected {{ title|lower }} neighborhoods">
             {% for area in deal_values.areas.get(tier, []) %}
-            <li class="area-chip"><span>{{ area }}</span><input type="hidden" name="areas_{{ tier }}" value="{{ area }}" data-area-value><button type="button" class="area-remove" data-area-remove aria-label="Remove {{ area }} from {{ title|lower }} areas">Remove</button></li>
+            <li class="area-chip"><span>{{ area }}</span><input type="hidden" name="areas_{{ tier }}" value="{{ area }}" data-area-value><button type="button" class="area-remove" data-area-remove aria-label="Remove {{ area }} from {{ title|lower }} areas">&times;</button></li>
             {% endfor %}
           </ul>
         </section>

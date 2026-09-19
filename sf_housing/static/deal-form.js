@@ -135,7 +135,9 @@
     remove.type = "button";
     remove.className = "area-remove";
     remove.dataset.areaRemove = "";
-    remove.textContent = "Remove";
+    // A cross, matched to the one the page renders. The name stays in the
+    // label, where a screen reader reads it and a cross would say nothing.
+    remove.textContent = "\u00d7";
     remove.setAttribute("aria-label", `Remove ${area}`);
     remove.addEventListener("click", removeArea);
     chip.append(label, value, remove);

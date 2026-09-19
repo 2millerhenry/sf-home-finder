@@ -1,3 +1,16 @@
+SF Home Finder 0.5.9 for Windows x64
+
+The install now says how far along it is, not just how long it has been
+going. The step that takes the longest -- the one that gets everything ready
+before the app starts -- counts its way to a hundred per cent as it loads,
+which is a real count of the work rather than a bar moving on a timer.
+
+A neighbourhood you have chosen is removed with a cross rather than the word
+"Remove" beside every one of them, the note under the budgets is shorter, and
+the shortlist no longer carries a sentence about how unpriced homes are
+placed.
+
+
 SF Home Finder 0.5.8 for Windows x64
 
 Installing says what it is doing. Each step is one line with a tick and the

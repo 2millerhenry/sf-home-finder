@@ -877,6 +877,11 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
    lines nobody tracks back from, which is what made the help under the
    home types read as fine print to skip. */
 .field-help { max-width: 78ch; margin: -3px 0 0; color: var(--muted); font-size: 0.76rem; line-height: 1.45; }
+/* Wider than the rest, because this one carries a button: at 78ch the
+   sentence broke mid-clause and left "Hide price ranges" alone on a third
+   line, reading as a stray link rather than the control it is. */
+.budget-help { max-width: 96ch; margin: 12px 0 0; line-height: 1.5; }
+.budget-toggle { margin-left: 4px; white-space: nowrap; }
 .compact-fields { display: grid; gap: 20px; }
 .compact-fields fieldset { margin: 0; padding: 0; border: 0; }
 .compact-fields legend { margin: 0 0 9px; font-size: 0.78rem; font-weight: 690; }
@@ -1086,9 +1091,13 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
 .area-tier-help { margin: 2px 0 10px; min-height: 2.6em; color: var(--muted); font-size: 0.69rem; line-height: 1.3; }
 .area-tier-heading > span { flex: 0 0 auto; padding: 3px 6px; border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 0.64rem; font-weight: 700; }
 .area-selected { min-height: 4px; margin: 9px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; list-style: none; }
-.area-chip { min-height: 30px; padding: 3px 4px 3px 8px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--accent-soft); color: var(--accent-hover); font-size: 0.68rem; font-weight: 650; }
-.area-remove { min-height: 22px; padding: 2px 5px; border-color: transparent; border-radius: 999px; background: transparent; color: inherit; font-size: 0.62rem; }
-.area-remove:hover { border-color: var(--accent-line); background: var(--surface); }
+.area-chip { min-height: 30px; padding: 3px 5px 3px 10px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--accent-soft); color: var(--accent-hover); font-size: 0.68rem; font-weight: 650; }
+/* A cross, not the word: "Remove" printed beside each of a dozen
+   neighbourhoods is the same word a dozen times, and it made every chip as
+   wide as its label again. The name stays in the button's label for anyone
+   reading by ear. */
+.area-remove { width: 19px; height: 19px; min-height: 19px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-color: transparent; border-radius: 999px; background: transparent; color: inherit; font-size: 0.95rem; line-height: 1; opacity: 0.5; }
+.area-remove:hover, .area-remove:focus-visible { opacity: 1; border-color: var(--accent-line); background: var(--surface); }
 .preference-matrix { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 /* Naming the three options once at the top removes eighteen repeated labels and
    lets the controls sit in columns the eye can run down. */

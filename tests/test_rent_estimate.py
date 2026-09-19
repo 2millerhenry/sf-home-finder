@@ -155,7 +155,6 @@ def test_an_unpriced_home_is_ranked_by_what_its_area_usually_costs(board) -> Non
     assert page.index("Private room cheap-area") < page.index("Private room dear-area")
     stored = {item["id"]: item["score"] for item in repository.query_listings(housing_kind="room", minimum_score=0)}
     assert stored[dear] > stored[cheap], "without the estimate the order would be the other way"
-    assert "placed by what similar homes nearby rent for" in page
     assert 'aria-sort="descending"' not in page, "the rows are no longer in plain score order"
 
 
@@ -192,7 +191,10 @@ def test_other_orders_and_views_are_left_alone(board) -> None:
     application, repository, cheap, dear = board
     with TestClient(application) as client:
         page = client.get("/?housing=room&view=active&sort=newest").text
-    assert "placed by what similar homes nearby rent for" not in page
+    # The note that used to say so is gone from the page, and "a sentence is
+    # absent" would pass whatever this did. What still shows the difference is
+    # the sort arrow: it is withheld only where the estimate has moved rows.
+    assert 'aria-sort="descending"' in page
 
 
 def test_a_home_another_site_prices_is_never_given_an_estimate(tmp_path: Path) -> None:

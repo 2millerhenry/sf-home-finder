@@ -193,11 +193,6 @@
     </div>
     <span class="result-count">{% if pages > 1 %}{{ "{:,}".format(first_on_page) }}&ndash;{{ "{:,}".format(first_on_page + listings|length - 1) }} of {% endif %}{{ "{:,}".format(total_homes) }} {{ result_noun }}{% if total_homes != 1 %}s{% endif %}</span>
   </header>
-  {% if estimated_order %}
-  {#- Said because the rows are no longer in plain score order, and the arrow
-      that would claim they are is gone for the same reason. -#}
-  <p class="order-note">Homes that state no rent are placed by what similar homes nearby rent for. The rent shown is only ever what the listing itself says.</p>
-  {% endif %}
 
   {% if listings %}
   {% if view == 'saved' %}
