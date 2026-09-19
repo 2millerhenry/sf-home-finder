@@ -1100,7 +1100,17 @@ def test_open_waits_as_long_for_a_first_answer_as_the_installer_does() -> None:
     def window(script: str) -> int:
         import re
 
-        return max(int(match) for match in re.findall(r"/usr/bin/seq 1 (\d+)", script))
+        # Open counts attempts; the installer names its allowance, because it
+        # waits inside a helper that draws a spinner rather than in a bare
+        # loop. Both are seconds, and both have to be found: a pattern that
+        # matches neither would let this pass by comparing nothing.
+        found = [
+            int(match)
+            for pattern in (r"/usr/bin/seq 1 (\d+)", r"FIRST_ANSWER_SECONDS=(\d+)")
+            for match in re.findall(pattern, script)
+        ]
+        assert found, "no wait window found in this script"
+        return max(found)
 
     assert window(opener) >= window(installer), "Open gives up before the app is up"
     assert "did not start" not in opener, "a slow start is not a failed start"

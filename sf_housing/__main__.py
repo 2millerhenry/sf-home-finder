@@ -12,7 +12,31 @@ def main() -> None:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", default=8000, type=int)
     subparsers.add_parser("scan", help="Run one scan now and exit")
+    subparsers.add_parser(
+        "prepare", help="Do the work a first start would do, then exit"
+    )
     args = parser.parse_args()
+
+    if args.command == "prepare":
+        # Importing the app *is* the start-up: sf_housing.app builds its
+        # application at import, which upgrades the board and re-ranks it when
+        # a re-rank is owed. Nothing is served and no scan or scheduler runs,
+        # because those begin with the server rather than the import.
+        #
+        # This exists for the installer to call. A first start after an install
+        # always owes a re-rank -- the installer retracts the mark, so that a
+        # downgrade and back cannot leave one version vouching for another's
+        # scores -- and the port does not open until that finishes, on top of
+        # macOS vetting a runtime it has never seen. Measured on a real
+        # 9,615-home board: fifty seconds run plainly, seventy-three inside
+        # the login service at the background priority launchd gives it, and
+        # six minutes during an upgrade on a busy Mac. Run here it is the
+        # installer's own visible step rather than silence from an app that
+        # looks like it failed to start; the service then starts in three and
+        # a half seconds.
+        from . import app as _started  # noqa: F401
+
+        raise SystemExit(0)
 
     if args.command == "scan":
         from .apify import ApifyTokenStore

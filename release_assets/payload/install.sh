@@ -3,7 +3,7 @@ set -euo pipefail
 
 RELEASE_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 PAYLOAD_DIR="$RELEASE_ROOT/payload"
-VERSION="0.5.7"
+VERSION="0.5.8"
 PYTHON_VERSION="3.12.10"
 PORT="${SF_HOUSING_PORT:-8000}"
 APP_ROOT="${SF_HOUSING_APP_ROOT:-$HOME/Library/Application Support/SF Housing Monitor}"
@@ -26,10 +26,56 @@ RUNTIMES_DIR="$APP_ROOT/runtimes"
 RELEASES_DIR="$APP_ROOT/releases"
 UV_BIN="$PAYLOAD_DIR/uv"
 LOCK_FILE="$PAYLOAD_DIR/requirements.lock"
-WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.7-py3-none-any.whl"
+WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.8-py3-none-any.whl"
 
 say() { printf '%s\n' "$*"; }
 fail() { say "Installation stopped: $*"; exit 1; }
+
+# One line per step: a spinner while it runs, a tick and how long it took when
+# it is done. What the step printed is held back unless it fails -- uv names
+# all forty-seven libraries it installs, which is a wall of text nobody reads
+# and which buried the one line that matters on the one run that went wrong.
+#
+# Plain lines when stdout is not a terminal, because a spinner written to a
+# file is several hundred carriage returns: CI reads this, and so does anybody
+# piping the install to a log to send on.
+SPIN=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+STEP_PID=""
+STEP_LOG=""
+step() {
+  local label=$1 limit=$2; shift 2
+  local started rc=0 i=0 elapsed=0
+  : >"$STEP_LOG"
+  started=$(/bin/date +%s)
+  if [ -t 1 ]; then
+    "$@" >"$STEP_LOG" 2>&1 &
+    STEP_PID=$!
+    while /bin/kill -0 "$STEP_PID" 2>/dev/null; do
+      elapsed=$(( $(/bin/date +%s) - started ))
+      if [ "$elapsed" -ge "$limit" ]; then
+        /bin/kill "$STEP_PID" 2>/dev/null || true
+        rc=124
+        break
+      fi
+      printf '\r\033[K  %-34s %s  %ss' "$label" "${SPIN[$((i % 10))]}" "$elapsed"
+      i=$((i + 1))
+      /bin/sleep 0.12
+    done
+    if [ "$rc" = 0 ]; then wait "$STEP_PID" 2>/dev/null || rc=$?; else wait "$STEP_PID" 2>/dev/null || true; fi
+    STEP_PID=""
+    elapsed=$(( $(/bin/date +%s) - started ))
+    if [ "$rc" = 0 ]; then
+      printf '\r\033[K  %-34s ✓  %ss\n' "$label" "$elapsed"
+    else
+      printf '\r\033[K  %-34s ✗  %ss\n' "$label" "$elapsed"
+    fi
+  else
+    say "  $label..."
+    "$@" >"$STEP_LOG" 2>&1 || rc=$?
+  fi
+  if [ "$rc" != 0 ] && [ -s "$STEP_LOG" ]; then /usr/bin/tail -6 "$STEP_LOG" || true; fi
+  return "$rc"
+}
 
 if [ "$(uname -s)" != "Darwin" ]; then
   fail "this release supports macOS only."
@@ -62,8 +108,12 @@ say "Installing SF Home Finder $VERSION..."
 /bin/chmod 700 "$APP_ROOT" "$DATA_DIR" "$LOG_DIR"
 
 STAGE="$(/usr/bin/mktemp -d "$APP_ROOT/.install.XXXXXX")"
+STEP_LOG="$STAGE/step.log"
 cleanup() { /bin/rm -rf "$STAGE"; }
 trap cleanup EXIT
+# Ctrl-C during a step would otherwise leave the step running and the cursor
+# mid-line.
+trap 'if [ -n "$STEP_PID" ]; then /bin/kill "$STEP_PID" 2>/dev/null || true; fi; printf "\n"; exit 130' INT
 
 export UV_CACHE_DIR="$APP_ROOT/cache"
 export UV_PYTHON_INSTALL_DIR="$APP_ROOT/python"
@@ -83,15 +133,19 @@ export UV_PYTHON_INSTALL_DIR="$APP_ROOT/python"
 # Windows installer has always said this (Invoke-Uv in windows/payload
 # install.ps1); this is the same sentence.
 UV_FAILED="the private runtime download did not finish. Check your internet connection, then run this again."
-say "1/4  Downloading a private Python (15 MB)..."
-"$UV_BIN" python install "$PYTHON_VERSION" --install-dir "$UV_PYTHON_INSTALL_DIR" --no-bin || fail "$UV_FAILED"
-say "2/4  Creating its own environment..."
-"$UV_BIN" venv "$STAGE/runtime" --python "$PYTHON_VERSION" --managed-python --no-project --quiet || fail "$UV_FAILED"
-say "3/4  Downloading the libraries it needs..."
-"$UV_BIN" pip sync "$LOCK_FILE" --python "$STAGE/runtime/bin/python" --strict || fail "$UV_FAILED"
-say "4/4  Installing SF Home Finder itself..."
-"$UV_BIN" pip install "$WHEEL_FILE" --python "$STAGE/runtime/bin/python" --no-deps --quiet || fail "$UV_FAILED"
-"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.7"' ||
+say ""
+step "Downloading a private Python" 1800 \
+  "$UV_BIN" python install "$PYTHON_VERSION" --install-dir "$UV_PYTHON_INSTALL_DIR" --no-bin || fail "$UV_FAILED"
+step "Setting up its own environment" 600 \
+  "$UV_BIN" venv "$STAGE/runtime" --python "$PYTHON_VERSION" --managed-python --no-project --quiet || fail "$UV_FAILED"
+# --compile-bytecode so the libraries are compiled here, at the priority a
+# person is watching, rather than by the login service on its first import at
+# the background priority launchd gives it.
+step "Downloading the libraries it needs" 1800 \
+  "$UV_BIN" pip sync "$LOCK_FILE" --python "$STAGE/runtime/bin/python" --strict --compile-bytecode || fail "$UV_FAILED"
+step "Installing SF Home Finder" 600 \
+  "$UV_BIN" pip install "$WHEEL_FILE" --python "$STAGE/runtime/bin/python" --no-deps --quiet --compile-bytecode || fail "$UV_FAILED"
+"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.8"' ||
   fail "the installed app did not pass its version check. Download the ZIP again."
 
 # A safety copy of the housing database before anything is replaced, and the
@@ -106,7 +160,8 @@ say "4/4  Installing SF Home Finder itself..."
 # it is safe beside a running app, and a copy that cannot be taken stops the
 # install here with the old app untouched and still serving.
 if [ -f "$DATA_DIR/housing.sqlite3" ]; then
-  "$STAGE/runtime/bin/python" -I -m sf_housing.backups protect "$APP_ROOT" ||
+  step "Backing up your homes" 900 \
+    "$STAGE/runtime/bin/python" -I -m sf_housing.backups protect "$APP_ROOT" ||
     fail "your housing data could not be backed up first, so nothing was changed. The reason is above; free some disk space if it says the disk is full, then run this again."
 fi
 
@@ -246,6 +301,21 @@ PLIST
 /bin/cp "$PLIST_TMP" "$PLIST_PATH"
 /bin/chmod 600 "$PLIST_PATH"
 
+# The pass the step above made owed, run here rather than by the service.
+#
+# Measured on a real 9,615-home board: a newly installed runtime's first
+# start takes about fifty seconds, nearly all of it macOS vetting libraries
+# it has not seen before and Python compiling them. Inside the login service
+# that same work took seventy-three seconds at the background priority
+# launchd gives it, and six minutes in the upgrade this fixes, on a Mac busy
+# with the install itself. Run here it is one visible step, and the service
+# then starts in three and a half seconds.
+#
+# Never fatal. If it cannot run, the service does the same work on its first
+# start, exactly as every release before this one did.
+step "Getting it ready to start" 1800 \
+  /usr/bin/env SF_HOUSING_DATA_DIR="$DATA_DIR" "$RUNTIME_TARGET/bin/python" -I -m sf_housing prepare || true
+
 if [ "${SF_HOUSING_NO_LAUNCH_AGENT:-0}" = "1" ]; then
   say "LaunchAgent installation skipped for isolated validation."
   SF_HOUSING_APP_ROOT="$APP_ROOT" SF_HOUSING_PORT="$PORT" \
@@ -257,20 +327,24 @@ else
   /bin/launchctl kickstart -k "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
 fi
 
-say "Starting it up..."
-# launchd throttles a restart to ThrottleInterval, ten seconds, and a first
-# start on a full board spends about fifteen more re-ranking what is already
-# stored. Two throttled attempts and that is a minute gone, which is why this
-# waits well past what a healthy start needs rather than the 45 seconds it used
-# to: the old window was tight enough that a normal install could miss it.
+# Waiting for the first answer. The heavy work is done by now, so a healthy
+# start is seconds; the allowance is generous because a Mac busy with Spotlight
+# indexing a brand-new runtime can still make it slow, and saying "it did not
+# work" to somebody whose app is seconds away is the failure that matters here.
+FIRST_ANSWER_SECONDS=180
+answers() {
+  local deadline=$(( $(/bin/date +%s) + FIRST_ANSWER_SECONDS )) health
+  while [ "$(/bin/date +%s)" -lt "$deadline" ]; do
+    health="$(/usr/bin/curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" 2>/dev/null || true)"
+    case "$health" in
+      *'"app":"sf-home-finder"'*|*'"app": "sf-home-finder"'*|*'"ok":true'*|*'"ok": true'*) return 0 ;;
+    esac
+    /bin/sleep 1
+  done
+  return 1
+}
 HEALTHY=0
-for attempt in $(/usr/bin/seq 1 150); do
-  HEALTH="$(/usr/bin/curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" 2>/dev/null || true)"
-  case "$HEALTH" in
-    *'"app":"sf-home-finder"'*|*'"app": "sf-home-finder"'*|*'"ok":true'*|*'"ok": true'*) HEALTHY=1; break ;;
-  esac
-  /bin/sleep 1
-done
+if step "Starting it up" "$(( FIRST_ANSWER_SECONDS + 60 ))" answers; then HEALTHY=1; fi
 
 if [ "$HEALTHY" != 1 ]; then
   # The install itself finished: the runtime is in place and the login service
@@ -281,8 +355,8 @@ if [ "$HEALTHY" != 1 ]; then
   say ""
   say "Installed, but it has not answered yet. It is probably still starting."
   say ""
-  say "  Wait a minute, then open:  http://127.0.0.1:$PORT/"
-  say "  Still nothing? Double-click: Repair SF Home Finder"
+  say "  Give it a minute, then open:  http://127.0.0.1:$PORT/   (⌘-click it)"
+  say "  Still nothing? Run:           $CLI_PATH repair"
   say "  What went wrong is logged in: $LOG_DIR/service-error.log"
   say ""
   say "Your profile and history are safe in: $DATA_DIR"

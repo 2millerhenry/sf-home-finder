@@ -63,14 +63,6 @@ ROOT="${ROOT%/payload/install.sh}"
 [ -f "${ROOT:-}/payload/install.sh" ] || fail "that is not a release. Try the ZIP instead: https://github.com/$REPO/releases/latest"
 
 echo
-# What comes next is two downloads behind one line of output -- a private
-# Python, then the libraries it needs -- and on a slow connection that is a
-# minute or more of a cursor not moving. Saying so costs nothing and is the
-# difference between somebody waiting and somebody pressing Ctrl-C.
-echo "Next it downloads a private Python and the libraries it needs, about"
-echo "20 MB in total. Measured at twenty seconds on a quick connection."
-echo
-
 # Run it rather than exec it. exec replaces this shell, which would mean the
 # EXIT trap above never fires and roughly 60MB of download and unpacked release
 # stayed in the temp folder after every install.

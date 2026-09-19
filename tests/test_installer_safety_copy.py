@@ -275,3 +275,30 @@ def test_a_first_install_has_nothing_to_copy(mac: Mac) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not list((mac.app / "backups").glob("housing-*.sqlite3"))
+
+
+def test_the_installer_does_the_first_start_work_between_stopping_and_starting() -> None:
+    """The regression: an upgrade sat silent for six minutes, then said it had
+    not worked.
+
+    A first start re-ranks the whole board before it opens its port, because
+    the installer retracts the mark that says the board is already ranked.
+    Measured on a real 9,615-home board: fifty seconds run here, seventy-
+    three inside the login service, which launchd runs at background priority,
+    and six minutes during the upgrade this fixes. Afterwards the service
+    starts in three and a half seconds.
+
+    Where it sits is the whole of it. Before the old app is stopped, two
+    versions would write to one board; after the service is started, the
+    service has already begun the work itself and this would be a second copy
+    of it racing the first.
+    """
+    installer = (PAYLOAD / "install.sh").read_text(encoding="utf-8")
+
+    prepare = installer.index("-m sf_housing prepare")
+    stopped = installer.index("launchctl bootout")
+    started = installer.index("launchctl bootstrap")
+
+    assert stopped < prepare < started, (
+        "the owed pass has to run after the old app stops and before the new service starts"
+    )

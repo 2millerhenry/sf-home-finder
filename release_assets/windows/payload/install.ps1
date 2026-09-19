@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Version = '0.5.7'
+$Version = '0.5.8'
 $PythonVersion = '3.12.10'
 $Port = 8000
 $TaskName = 'SF Housing Monitor'
@@ -133,15 +133,15 @@ try {
   # needs. uv draws perfectly good progress bars and they were suppressed, so
   # the slowest part of the install was the only part with nothing to watch.
   Write-Host '1/4  Downloading a private Python (15 MB)...'
-  Invoke-Uv -Arguments @('python', 'install', $PythonVersion, '--install-dir', (Join-Path $AppRoot 'python'), '--no-bin')
+  Invoke-Uv -Arguments @('python', 'install', $PythonVersion, '--install-dir', (Join-Path $AppRoot 'python'), '--no-bin', '--quiet')
   Write-Host '2/4  Creating its own environment...'
   $stageRuntime = Join-Path $stage 'runtime'
   Invoke-Uv -Arguments @('venv', $stageRuntime, '--python', $PythonVersion, '--managed-python', '--no-project')
   $stagePython = Join-Path $stageRuntime 'Scripts\python.exe'
   Write-Host '3/4  Downloading the libraries it needs...'
-  Invoke-Uv -Arguments @('pip', 'sync', $LockFile, '--python', $stagePython, '--strict')
+  Invoke-Uv -Arguments @('pip', 'sync', $LockFile, '--python', $stagePython, '--strict', '--quiet', '--compile-bytecode')
   Write-Host '4/4  Installing SF Home Finder itself...'
-  Invoke-Uv -Arguments @('pip', 'install', $WheelFile, '--python', $stagePython, '--no-deps')
+  Invoke-Uv -Arguments @('pip', 'install', $WheelFile, '--python', $stagePython, '--no-deps', '--quiet', '--compile-bytecode')
   & $stagePython -I -c "import sf_housing; assert sf_housing.__version__ == '$Version'"
   if ($LASTEXITCODE -ne 0) { Fail 'the installed app did not pass its version check.' }
 
@@ -225,6 +225,19 @@ try {
   } catch {
     Write-Host 'Note: Windows kept its default power settings for the startup task. The app still runs; it may pause on battery.'
   }
+  # The pass the retraction above made owed, run here rather than by the task.
+  # A first start re-ranks the whole board before it serves anything, and
+  # Wait-ForMonitor below does not merely look impatient when that is slow --
+  # it fails the install outright and sends the person to Repair for an app
+  # that was working. Measured on macOS, on a real 9,615-home board: about
+  # fifty seconds run in the foreground like this, against seventy-three
+  # inside the background service and six minutes on a busy machine. Never
+  # fatal: the task still does the work itself if this cannot.
+  Write-Host 'Getting it ready to start...'
+  try {
+    & { $env:SF_HOUSING_DATA_DIR = $DataDir; & $stagePython -I -m sf_housing prepare }
+  } catch { }
+
   $restartIfStopped = $false
   & schtasks.exe /Run /TN $TaskName | Out-Null
   if ($LASTEXITCODE -ne 0 -or -not (Wait-ForMonitor)) { Fail "the local dashboard did not become healthy. Run Repair; details are in $LogDir." }

@@ -37,7 +37,7 @@ if ! health; then
   # start re-ranks every stored home before it answers anything, which on a
   # board of 8,583 took 42 seconds. Thirty was short enough that a healthy app
   # on a full board was declared dead and the reader was sent to Repair.
-  for attempt in $(/usr/bin/seq 1 150); do
+  for attempt in $(/usr/bin/seq 1 180); do
     health && break
     /bin/sleep 1
   done

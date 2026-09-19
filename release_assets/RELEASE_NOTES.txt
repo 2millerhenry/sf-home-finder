@@ -1,3 +1,24 @@
+SF Home Finder 0.5.8
+
+Installing says what it is doing. Each step is one line with a tick and the
+time it took, instead of forty-seven library names scrolling past, and the
+line you are waiting on is the only one moving.
+
+Upgrading no longer looks like it failed. A first start after an install
+re-ranks every home already collected, and macOS vets a runtime it has never
+seen, and nothing is served until both finish. On a real board of 9,615 homes
+that took fifty seconds run plainly and seventy-three inside the background
+service the app runs as -- six minutes on a machine still busy installing.
+Past two and a half minutes the installer gave up and said it had not worked,
+while it was working. That work now happens during the install, as one
+visible step that nothing throttles, and the app itself then starts in three
+and a half seconds.
+
+If it still has not answered, the advice now names something that exists.
+It said to double-click Repair, which somebody who installed with the one-line
+command has no folder for; it now gives the command to run.
+
+
 SF Home Finder 0.5.7
 
 Your data is much harder to lose. Mac and Windows now keep backups by one

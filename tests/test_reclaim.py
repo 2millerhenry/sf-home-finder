@@ -160,8 +160,15 @@ def test_a_healthy_start_is_actually_recognised_as_one() -> None:
     """
     script = installer()
 
-    assert "HEALTHY=1; break ;;" in script, "a healthy response never marks the start as healthy"
-    assert script.index("HEALTHY=1; break ;;") < script.index('if [ "$HEALTHY" != 1 ]; then')
+    # The matcher and the flag now live apart: a function that answers "yes"
+    # when the app does, and the one line that records it. Both have to be
+    # real, because either one missing leaves a gate that can only fail.
+    answers = script[script.index("answers() {") : script.index("HEALTHY=0")]
+    assert '"app":"sf-home-finder"' in answers and "return 0 ;;" in answers, (
+        "a healthy response never returns success"
+    )
+    assert "then HEALTHY=1; fi" in script, "a healthy response never marks the start as healthy"
+    assert script.index("then HEALTHY=1; fi") < script.index('if [ "$HEALTHY" != 1 ]; then')
 
 
 def test_nothing_is_reclaimed_until_the_new_version_has_served_a_request() -> None:

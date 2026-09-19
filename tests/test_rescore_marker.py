@@ -17,6 +17,9 @@ that direction and a stale shortlist is the cost of being wrong in the other.
 from __future__ import annotations
 
 import ast
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -606,3 +609,56 @@ def test_a_deal_that_cannot_be_serialised_scores_again_rather_than_failing() -> 
 
     assert deal_fingerprint(preferences) is None
     assert current_fingerprint(preferences) is None
+
+
+# --------------------------------------------------------------------------
+# The pass the installer runs so that a first start does not
+# --------------------------------------------------------------------------
+
+
+def test_prepare_leaves_the_board_ready_so_a_first_start_re_ranks_nothing(
+    tmp_path: Path, preferences: Preferences
+) -> None:
+    """The regression: an upgrade looked like a failed install.
+
+    A first start after an install always owes a pass, because the installer
+    retracts the mark so that a downgrade and back cannot leave one version
+    vouching for another's scores. The port does not open until that pass
+    finishes, on top of macOS vetting a runtime it has never seen. Measured
+    on a real 9,615-home board: fifty seconds run plainly, seventy-three
+    inside the login service at background priority, and six minutes during
+    an upgrade on a Mac busy with the install. The installer gave up after two
+    and a half minutes and said it had not worked, while it was working.
+
+    ``prepare`` is that same pass, run by the installer in the foreground
+    where somebody is watching it, so the service starts with nothing owed.
+    """
+    data = tmp_path / "data"
+    (data / "config").mkdir(parents=True)
+    (data / "config" / "preferences.yaml").write_text(TEST_PREFERENCES, encoding="utf-8")
+    repository = Repository(data / "housing.sqlite3")
+    repository.initialize()
+    _board(repository, preferences, count=5)
+    assert rescore_is_needed(repository, preferences), (
+        "the board has to start out owing a pass, or this proves nothing"
+    )
+
+    finished = subprocess.run(
+        [sys.executable, "-m", "sf_housing", "prepare"],
+        # The data directory has to be set before the app is imported: importing
+        # it builds the application, and an unset one opens the repository's own
+        # board instead of this one.
+        env={
+            **os.environ,
+            "SF_HOUSING_DATA_DIR": str(data),
+            "SF_HOUSING_NO_UPDATE_CHECK": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+    assert finished.returncode == 0, finished.stderr
+    assert not rescore_is_needed(Repository(data / "housing.sqlite3"), preferences), (
+        "the service would still re-rank the whole board on its first start"
+    )
