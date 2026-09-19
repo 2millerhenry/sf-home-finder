@@ -1,3 +1,44 @@
+SF Home Finder 0.5.7
+
+Your data is much harder to lose. Mac and Windows now keep backups by one
+set of rules. Repair restores the newest copy that opens cleanly and never
+deletes the last one, and a board that is damaged is refused at start with a
+message that says to run Repair, rather than a page that half works. This
+matters most on the way up from an older version: Repair up to 0.5.6 deleted
+the backups it was meant to restore from and restored nothing. This release's
+Repair runs its own script, not the one an older install left behind.
+
+The same home listed on several sites now appears once. Copies are joined only
+on clear evidence, because merging two different flats would hide one of them;
+a star or a pass reaches every copy, and the counts beside your cut-off count
+homes rather than listings. Where a site states no rent, the typical rent of
+homes the same size in the same neighbourhood is used to rank it, and is never
+shown as though it were the asking price.
+
+The sites are asked less, and more gently. A check refused partway keeps the
+pages it had already read, errors are said in words, a site your deal does not
+need is not asked at all, and a check that ran with no network no longer
+counts against a source as though the source had failed.
+
+It stays quick after a year of use. Measured on a board of 213,000 homes: the
+dashboard opens in under half a second instead of nearly six, starting takes
+3.3 seconds instead of 4.6, and a page of the archive about a second instead
+of twenty. A home stays on the board for 21 days after it is found, then moves
+to the archive; once no site lists it any more it is kept for 120 days and
+then cleared -- except any you starred, noted or passed, which are never
+cleared.
+
+The neighbourhood filter no longer lists "San Francisco" as though it were a
+neighbourhood beside Castro and Nob Hill.
+
+Installing is smaller and says what it is doing. The one-line install now
+downloads 12 MB instead of 20, and names each of its four steps instead of
+sitting on one unchanging line while it fetches a private Python and the
+libraries it needs. Installs through that command are counted, one per address
+per day with no address kept; the README says how, and how to install without
+being counted.
+
+
 SF Home Finder 0.5.6
 
 Checks finish about forty seconds sooner again -- measured across this

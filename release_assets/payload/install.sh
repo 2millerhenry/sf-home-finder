@@ -3,7 +3,7 @@ set -euo pipefail
 
 RELEASE_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 PAYLOAD_DIR="$RELEASE_ROOT/payload"
-VERSION="0.5.6"
+VERSION="0.5.7"
 PYTHON_VERSION="3.12.10"
 PORT="${SF_HOUSING_PORT:-8000}"
 APP_ROOT="${SF_HOUSING_APP_ROOT:-$HOME/Library/Application Support/SF Housing Monitor}"
@@ -26,7 +26,7 @@ RUNTIMES_DIR="$APP_ROOT/runtimes"
 RELEASES_DIR="$APP_ROOT/releases"
 UV_BIN="$PAYLOAD_DIR/uv"
 LOCK_FILE="$PAYLOAD_DIR/requirements.lock"
-WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.6-py3-none-any.whl"
+WHEEL_FILE="$PAYLOAD_DIR/sf_home_finder-0.5.7-py3-none-any.whl"
 
 say() { printf '%s\n' "$*"; }
 fail() { say "Installation stopped: $*"; exit 1; }
@@ -91,7 +91,7 @@ say "3/4  Downloading the libraries it needs..."
 "$UV_BIN" pip sync "$LOCK_FILE" --python "$STAGE/runtime/bin/python" --strict || fail "$UV_FAILED"
 say "4/4  Installing SF Home Finder itself..."
 "$UV_BIN" pip install "$WHEEL_FILE" --python "$STAGE/runtime/bin/python" --no-deps --quiet || fail "$UV_FAILED"
-"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.6"' ||
+"$STAGE/runtime/bin/python" -I -c 'import sf_housing; assert sf_housing.__version__ == "0.5.7"' ||
   fail "the installed app did not pass its version check. Download the ZIP again."
 
 # A safety copy of the housing database before anything is replaced, and the

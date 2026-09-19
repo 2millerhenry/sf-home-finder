@@ -113,11 +113,15 @@ def github_token() -> str | None:
 def platform_of(asset_name: str) -> str | None:
     """Which download this is, or None if it is not one.
 
-    A checksum file sits beside each zip for people who verify by hand. It is
-    a few dozen bytes, not an install, and counting it would turn one careful
-    manual download into two.
+    A checksum file sits beside each archive for people who verify by hand. It
+    is a few dozen bytes, not an install, and counting it would turn one
+    careful manual download into two.
+
+    From 0.5.7 the Mac release is two archives, and the .tar.xz is the one the
+    one-line install fetches -- so it is where most Mac downloads will land.
+    Counting only zips would have made the busiest path the invisible one.
     """
-    if not asset_name.endswith(".zip"):
+    if not asset_name.endswith((".zip", ".tar.xz")):
         return None
     if "macOS" in asset_name:
         return "macOS"

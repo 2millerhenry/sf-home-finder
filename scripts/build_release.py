@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION = "0.5.6"
+VERSION = "0.5.7"
 RELEASE_NAME = f"SF-Home-Finder-{VERSION}-macOS-arm64"
 # Every entry in both archives is pinned to this one instant. A real
 # modification time is the thing that would otherwise make two builds of one
