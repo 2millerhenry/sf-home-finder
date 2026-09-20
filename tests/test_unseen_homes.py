@@ -25,6 +25,7 @@ from sf_housing.database import (
     UNSEEN_SHORTLIST_AFTER,
     Repository,
     near_miss_distance,
+    near_miss_order,
 )
 from sf_housing.rent_estimate import RentTable, ranking_order
 
@@ -66,14 +67,25 @@ def home(
     housing_kind: str = "whole_unit",
     unit_type: str | None = "one_bedroom",
     price: int | None = 1800,
+    over_budget: tuple[int, int] | None = None,
+    eligibility_reasons: list[str] | None = None,
 ) -> int:
-    """One stored home, last returned by a search ``seen`` hours before ``NOW``."""
+    """One stored home, last returned by a search ``seen`` hours before ``NOW``.
+
+    ``over_budget`` is the (over by, budget maximum) pair the scorer writes
+    down when a home misses on rent, because the score cannot say by how much
+    and Near matches is exactly that question.
+    """
+    details = (
+        {"price": {"over_by": over_budget[0], "maximum": over_budget[1]}} if over_budget else {}
+    )
     with repository.connection() as connection:
         cursor = connection.execute(
             """INSERT INTO listings (platform, source_id, title, original_url, canonical_url,
                    price, housing_kind, unit_type, concern, score, eligibility, status, note,
-                   metadata_json, home_key, first_found, last_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   metadata_json, home_key, score_details_json, eligibility_reasons_json,
+                   first_found, last_seen)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 platform,
                 source_id,
@@ -89,6 +101,8 @@ def home(
                 note,
                 json.dumps(metadata or {}),
                 home_key,
+                json.dumps(details),
+                json.dumps(eligibility_reasons or []),
                 at(24 * 10),
                 at(seen),
             ),
@@ -498,8 +512,10 @@ def test_a_home_that_went_quiet_sorts_among_the_near_matches_by_how_long_ago(
 ) -> None:
     """Sorted by how nearly each home matched, absence had no measure at all.
 
-    So a home that scored 92 until yesterday sorted below every home the deal
-    had turned down, when it is the likeliest of them to still be worth a call.
+    So a home that scored 92 until yesterday sorted in the order it happened
+    to be read in, among homes the deal had turned down. Absence is now ranked
+    behind every measured miss, and the homes that have only gone quiet are
+    ordered among themselves by how recently anyone last saw them.
     """
     just_gone = {"unseen_days": UNSEEN_SHORTLIST_AFTER.total_seconds() / 86400 + 0.5, "score": 92}
     long_gone = {"unseen_days": UNSEEN_SHORTLIST_AFTER.total_seconds() / 86400 * 4, "score": 92}
@@ -507,10 +523,33 @@ def test_a_home_that_went_quiet_sorts_among_the_near_matches_by_how_long_ago(
 
     order = sorted(
         (long_gone, nine_points_short, just_gone),
-        key=lambda item: near_miss_distance(item, CUT_OFF),
+        key=lambda item: near_miss_order(item, CUT_OFF),
     )
 
-    assert order == [just_gone, nine_points_short, long_gone]
+    assert order == [nine_points_short, just_gone, long_gone]
+
+
+def test_a_home_nobody_is_listing_any_more_ranks_below_one_that_only_just_missed(
+    repository: Repository,
+) -> None:
+    """Absence may only ever demote, and the closeness order forgot it.
+
+    Measured on the same scale as a real miss, "nobody has listed this for a
+    day longer than we allow" beat "$50 a month over your budget, and the site
+    is still showing it" -- so in a view that promises to say how close each
+    home came, the homes somebody can still ring about sank below the ones
+    nobody can.
+    """
+    home(repository, "still_listed_just_over", seen=1, score=49, eligibility="ineligible",
+         eligibility_reasons=["The monthly price exceeds this path's maximum"],
+         over_budget=(50, 3000))
+    home(repository, "gone_quiet", seen=SHORTLIST_HOURS + 8, score=92)
+    searched(repository)
+
+    assert [row["source_id"] for row in _rows(repository, "near_matches", sort="closeness")] == [
+        "still_listed_just_over",
+        "gone_quiet",
+    ]
 
 
 def test_a_home_still_showing_up_is_not_measured_as_a_near_miss_by_absence(
@@ -518,6 +557,9 @@ def test_a_home_still_showing_up_is_not_measured_as_a_near_miss_by_absence(
 ) -> None:
     """The third measure must not quietly reorder the two that were there."""
     assert near_miss_distance({"score": CUT_OFF - 1, "unseen_days": 0.0}, CUT_OFF) == pytest.approx(0.1)
+    # Ranked as the measured miss it is, with nothing added for an absence it
+    # does not have: the home is on its site today.
+    assert near_miss_order({"score": CUT_OFF - 1, "unseen_days": 0.0}, CUT_OFF) == (0, 0.1, 0.0)
 
 
 def test_the_page_says_a_home_went_quiet_rather_than_counting_points_it_did_not_lose(
@@ -656,6 +698,50 @@ def test_near_matches_tells_the_reader_the_source_stopped_listing_the_home(
 
     assert "Not listed by Zillow for 4 days" in page
     assert "points below your cut-off" not in page
+
+
+def test_a_near_match_over_the_budget_still_says_how_much_over_it_is(
+    tmp_path: Path,
+) -> None:
+    """A home can be both over the budget and no longer listed, and the money
+    is the reason worth showing.
+
+    Saying absence first replaced "$200/mo over your budget" with "not listed
+    for 4 days" on every such row, which is the one fact the row already
+    carries twice over -- the checked date and the price both say it -- while
+    the rent is the thing the reader decides on and nothing else states.
+    """
+
+    def board(repository: Repository) -> None:
+        home(repository, "over_and_quiet", seen=SHORTLIST_HOURS + 24, score=54,
+             housing_kind="room", unit_type=None, over_budget=(200, 2000))
+        searched(repository)
+
+    page = dashboard(tmp_path, board)
+
+    assert "$200/mo over your budget" in page
+    assert "Not listed by Zillow" not in page
+
+
+def test_a_near_match_short_of_the_cut_off_still_counts_the_points_it_missed_by(
+    tmp_path: Path,
+) -> None:
+    """A home that went quiet after falling short is still a home that fell
+    short, and that is why it is in this view.
+
+    Saying absence first told the reader a home was "not listed for 4 days"
+    and left them to guess whether it would have been shortlisted at all.
+    """
+
+    def board(repository: Repository) -> None:
+        home(repository, "short_and_quiet", seen=SHORTLIST_HOURS + 24, score=CUT_OFF - 4,
+             housing_kind="room", unit_type=None)
+        searched(repository)
+
+    page = dashboard(tmp_path, board)
+
+    assert "4 points below your cut-off" in page
+    assert "Not listed by Zillow" not in page
 
 
 def test_the_shortlist_stops_offering_a_home_its_source_has_dropped(

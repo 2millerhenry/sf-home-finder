@@ -381,12 +381,9 @@ def near_miss_distance(item: dict[str, Any], minimum_score: int) -> float:
     which leaves it short on points as well -- is judged by whichever miss is
     the nearer, because that is the one somebody would forgive.
 
-    A third kind joined them: a home short of nothing the deal asked for, which
-    its own source has simply stopped returning (``UNSEEN_SHORTLIST_AFTER``).
-    Measured against the allowance that put it here -- 0.0 the day it left the
-    shortlist, 1.0 twice as long gone -- because otherwise a home that scored
-    92 yesterday would sit below every home the deal turned down, and it is the
-    likeliest of all of them to still be worth a call.
+    Only the two misses the deal itself measured. A home nobody is listing any
+    more has missed nothing, so it has no distance here at all; where that home
+    goes is ``near_miss_order``'s question, not this one's.
 
     Never raises and never divides by a missing ceiling: a row stored before
     any of this shipped is put last rather than taking the page down with it.
@@ -399,11 +396,39 @@ def near_miss_distance(item: dict[str, Any], minimum_score: int) -> float:
     maximum = int(item.get("budget_maximum") or 0)
     if over_by > 0 and maximum > 0 and NEAR_MATCH_OVER_BUDGET > 0:
         distances.append(over_by / (maximum * NEAR_MATCH_OVER_BUDGET))
-    allowance = UNSEEN_SHORTLIST_AFTER.total_seconds() / 86400.0
-    unseen = float(item.get("unseen_days") or 0.0)
-    if unseen > allowance and allowance > 0:
-        distances.append((unseen - allowance) / allowance)
     return min(distances) if distances else float("inf")
+
+
+def near_miss_order(item: dict[str, Any], minimum_score: int) -> tuple[int, float, float]:
+    """Where a home sits in the closeness order: measured misses first.
+
+    A third kind of home reaches this view: one short of nothing the deal
+    asked for, whose own source has simply stopped returning it
+    (``UNSEEN_SHORTLIST_AFTER``). Absence was measured on the same scale as a
+    real miss, and that let it promote -- a home nobody has listed for a day
+    longer than we allow outranked a home still on its site that missed the
+    budget by $50. In a view that promises to say how close each home came,
+    the home somebody can still ring about has to come first: absence is not
+    an answer to that question, and it may only ever demote.
+
+    So a home with a measured miss is ranked ahead of every home that has only
+    gone quiet, and the quiet ones are ordered among themselves by how long
+    ago anyone last saw them -- 0.0 the day it left the shortlist, 1.0 twice
+    as long gone -- because a home that scored 92 yesterday is the likeliest
+    of them to still be worth a call. Absence breaks ties within a measured
+    miss too, which is the same rule once more: of two homes that missed by
+    exactly as much, the one still being listed goes first.
+    """
+    unseen = float(item.get("unseen_days") or 0.0)
+    measured = near_miss_distance(item, minimum_score)
+    if measured != float("inf"):
+        return (0, measured, unseen)
+    allowance = _as_days(UNSEEN_SHORTLIST_AFTER)
+    if allowance > 0 and unseen > allowance:
+        return (1, (unseen - allowance) / allowance, 0.0)
+    # Nothing measurable and nothing missing: a row stored before any of this
+    # shipped. Last, rather than in front of homes that did come close.
+    return (1, float("inf"), 0.0)
 
 
 def _as_days(after: timedelta) -> float:
@@ -2621,7 +2646,7 @@ class Repository:
             # Only where it means something. Asked for anywhere else -- a stale
             # link, or the control left on it while switching tabs -- the rows
             # keep the score order the query already gave them.
-            items.sort(key=lambda item: near_miss_distance(item, minimum_score))
+            items.sort(key=lambda item: near_miss_order(item, minimum_score))
             if limit is not None:
                 items = items[max(0, int(offset)) : max(0, int(offset)) + int(limit)]
         return ListingPage(rows=items, total=total)

@@ -321,10 +321,17 @@
           </td>
           <td class="cell-check">
             {%- if view == 'near_matches' -%}
-            {#- A home here for absence rather than for a miss is short of
-                nothing: printing "0 points below your cut-off" at it would be
-                both false and baffling, so it says what actually moved it. -#}
-            <p class="near-why">{% if listing.unseen_too_long %}Not listed by {{ listing.platform }} for {{ listing.unseen_days|round|int }} days{% elif listing.over_budget_by %}${{ "{:,}".format(listing.over_budget_by) }}/mo over your budget{% else %}{{ minimum_score - listing.score }} point{{ '' if minimum_score - listing.score == 1 else 's' }} below your cut-off{% endif %}</p>
+            {#- Three ways into this view, and a home can be here for more than
+                one of them, so they are said in the order they are worth
+                reading. The money first: it is what the reader decides on and
+                nothing else in the row states it. Then the points, for the
+                same reason. Absence last, because a home here for absence
+                alone is short of nothing -- printing "0 points below your
+                cut-off" at it would be both false and baffling -- while a
+                home that also went quiet has already said so twice in this
+                row, in the checked date and in the price. -#}
+            {%- set near_why %}{% if listing.over_budget_by %}${{ "{:,}".format(listing.over_budget_by) }}/mo over your budget{% elif listing.score < minimum_score %}{{ minimum_score - listing.score }} point{{ '' if minimum_score - listing.score == 1 else 's' }} below your cut-off{% elif listing.unseen_too_long %}Not listed by {{ listing.platform }} for {{ listing.unseen_days|round|int }} days{% endif %}{% endset -%}
+            {%- if near_why %}<p class="near-why">{{ near_why }}</p>{% endif -%}
             {%- endif -%}
             {%- set open_items = listing.blockers or listing.checks -%}
             {%- if open_items -%}
