@@ -1024,6 +1024,15 @@ def test_the_posted_column_survives_a_narrow_window(tmp_path: Path) -> None:
     assert 'class="meta-source"' in listing_line and "meta-checked" in listing_line, (
         "the listing line has to carry the source and when it was last seen"
     )
+    # And it has to be visible at every width. The meta line stands in for
+    # columns that exist at full width, so most of it is hidden there -- but
+    # the source has no column to stand in for any more, and hiding it left
+    # the widest windows naming no source at all.
+    hidden = [
+        rule for rule in css.split("}")
+        if "display: none" in rule and ".listing-compact-meta .meta-source" in rule
+    ]
+    assert not hidden, f"the source is hidden at some width: {hidden}"
 
 
 def test_the_score_cell_no_longer_repeats_the_check_column(tmp_path: Path) -> None:

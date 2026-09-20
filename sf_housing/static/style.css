@@ -704,7 +704,7 @@ select.is-selected { background: var(--surface-muted); border-color: var(--line-
 .listing-compact-meta .meta-source { color: var(--ink); font-weight: 620; }
 .listing-compact-meta .meta-found { color: var(--ink); font-weight: 620; font-variant-numeric: tabular-nums; }
 .listing-compact-meta .meta-found.is-found-date { color: var(--muted); font-weight: 550; }
-.listing-compact-meta .meta-source, .listing-compact-meta .meta-found, .listing-compact-meta .meta-area, .listing-compact-meta .meta-price { display: none; }
+.listing-compact-meta .meta-found, .listing-compact-meta .meta-area, .listing-compact-meta .meta-price { display: none; }
 .note-indicator { color: var(--accent-hover); font-weight: 680; }
 .contact-signal { color: var(--accent-hover); font-weight: 700; }
 .cell-fit ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
@@ -1421,7 +1421,7 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
      takes about 300px off, which is what the narrower table is set to. */
   .listing-table .cell-fit { display: none; }
   .listing-table { min-width: 1250px; }
-  .listing-compact-meta .meta-source, .listing-compact-meta .meta-found { display: inline; }
+  .listing-compact-meta .meta-found { display: inline; }
 }
 
 @media (max-width: 1370px) {
