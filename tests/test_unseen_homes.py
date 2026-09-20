@@ -26,6 +26,7 @@ from sf_housing.database import (
     Repository,
     near_miss_distance,
 )
+from sf_housing.rent_estimate import RentTable, ranking_order
 
 
 CUT_OFF = 60
@@ -64,6 +65,7 @@ def home(
     eligibility: str = "eligible",
     housing_kind: str = "whole_unit",
     unit_type: str | None = "one_bedroom",
+    price: int | None = 1800,
 ) -> int:
     """One stored home, last returned by a search ``seen`` hours before ``NOW``."""
     with repository.connection() as connection:
@@ -71,13 +73,14 @@ def home(
             """INSERT INTO listings (platform, source_id, title, original_url, canonical_url,
                    price, housing_kind, unit_type, concern, score, eligibility, status, note,
                    metadata_json, home_key, first_found, last_seen)
-               VALUES (?, ?, ?, ?, ?, 1800, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 platform,
                 source_id,
                 f"Flat {source_id}",
                 f"https://example.test/{platform}/{source_id}",
                 f"https://example.test/{platform}/{source_id}",
+                price,
                 housing_kind,
                 unit_type,
                 score,
@@ -226,6 +229,28 @@ def test_a_home_that_left_the_shortlist_is_still_stored_and_still_searchable(
             "SELECT status, score FROM listings WHERE id = ?", (listing_id,)
         ).fetchone()
     assert (row["status"], row["score"]) == ("active", 92)
+
+
+def test_the_rerank_an_unpriced_home_triggers_keeps_a_quiet_home_down(
+    repository: Repository,
+) -> None:
+    """The demotion has to survive the one pass that reorders the shortlist.
+
+    ``rent_estimate.ranking_order`` runs whenever any home on the shortlist
+    states no rent, and it sorts by the bands this query puts each home in.
+    If the band said "still showing up" for a home that had stopped
+    appearing, that pass would lift it back over every home somebody can go
+    and see -- and the page would say nothing, because the query's own order
+    was right when it left SQL.
+    """
+    home(repository, "quiet", seen=DEMOTE_HOURS + 1, score=95)
+    home(repository, "showing", seen=1, score=70)
+    home(repository, "unpriced", seen=1, score=65, price=None)
+    searched(repository)
+
+    ordered, _ = ranking_order(_rows(repository, "active"), {}, RentTable({}, {}), lambda listing: None)
+
+    assert [row["source_id"] for row in ordered] == ["showing", "unpriced", "quiet"]
 
 
 # --------------------------------------------------------------------------

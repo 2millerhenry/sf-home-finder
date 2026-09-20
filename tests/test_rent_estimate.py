@@ -1,7 +1,9 @@
-"""D3: a rent to rank by when the listing states none -- and nothing else.
+"""D3: a rent to rank by when the listing states none.
 
 Three hard rules from the decision: the estimate moves ranking only, never
-eligibility or a budget filter; it is never shown, exported or stored; and
+eligibility or a budget filter; it is never stored, and never shown without
+being named an estimate (which is where it is printed, and the tests that it
+is always marked, live in tests/test_where_the_price_came_from.py); and
 neighbourhood spellings are made one first, since "Tenderloin" (192 rows) and
 "tenderloin" (157) split one sample in two.
 """
@@ -158,18 +160,26 @@ def test_an_unpriced_home_is_ranked_by_what_its_area_usually_costs(board) -> Non
     assert 'aria-sort="descending"' not in page, "the rows are no longer in plain score order"
 
 
-def test_the_estimate_is_never_shown_exported_or_stored(board) -> None:
+def test_the_estimate_is_never_stored_and_never_passes_for_a_published_rent(board) -> None:
+    """The estimate is shown now (see tests/test_where_the_price_came_from.py),
+    and the three things that made showing it safe still hold: it is never
+    written to the board, it never appears without the word "Estimated", and
+    it never reaches the Price column a spreadsheet sorts and totals."""
     application, repository, cheap, dear = board
     before = _rows(repository)
     with TestClient(application) as client:
         page = client.get("/?housing=room&view=active&sort=score").text
         sheet = client.get("/listings.csv?housing=room&view=active&sort=score").text
         detail = client.get(f"/listings/{cheap}").text
-    for text in (page, sheet, detail):
-        assert "1,234" not in text and "1234" not in text
-        assert "3,456" not in text and "3456" not in text
-    table = {row["Address"]: row["Price"] for row in csv.DictReader(io.StringIO(sheet))}
-    assert table["Private room cheap-area"] == table["Private room dear-area"] == ""
+    # The page shows both medians, and says of both that they are medians.
+    assert "1,234" in page and "3,456" in page
+    assert page.count("Estimated") >= 2
+    # A single home's own page states what its listing states, and marks
+    # nothing, because there is nothing there to mark.
+    assert "1,234" not in detail and "1234" not in detail
+    table = {row["Address"]: row for row in csv.DictReader(io.StringIO(sheet))}
+    assert table["Private room cheap-area"]["Price"] == table["Private room dear-area"]["Price"] == ""
+    assert table["Private room cheap-area"]["Price basis"].startswith("Estimated $1,234")
     after = _rows(repository)
     assert [(row["id"], row["price"], row["score"], row["eligibility"]) for row in after] == [
         (row["id"], row["price"], row["score"], row["eligibility"]) for row in before

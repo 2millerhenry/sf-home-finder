@@ -75,7 +75,14 @@ from .potrero import (
     shortlist,
 )
 from .classification import classify_listing
-from .rent_estimate import WINDOW_DAYS, RentTable, ranking_order
+from .rent_estimate import (
+    PRICE_ESTIMATED,
+    PRICE_LAST_SEEN,
+    WINDOW_DAYS,
+    RentTable,
+    mark_price_basis,
+    ranking_order,
+)
 from .scoring import score_listing
 from .rescore_marker import rescore_is_needed
 from .scanner import Scanner
@@ -309,8 +316,10 @@ def select_listings(
             int(item["id"]) for item in listings if item.get("price") is None and item.get("home_price") is None
         ]
         if view == "active" and sort == "score" and unpriced:
-            # Ranking only: see rent_estimate. The rows are reordered; nothing
-            # in them changes, so the page and the CSV still say "Unknown".
+            # Ranking: see rent_estimate. The rows are reordered and nothing in
+            # them changes; the figure this places an unpriced home by is the
+            # same one ``mark_price_basis`` puts in its price column below,
+            # named there as an estimate.
             listings, estimated_order = ranking_order(
                 listings,
                 repository.home_candidates(unpriced),
@@ -320,6 +329,10 @@ def select_listings(
         total = len(listings)
         page = min(page, max(1, -(-total // PAGE_SIZE)))
         listings = listings[(page - 1) * PAGE_SIZE : page * PAGE_SIZE]
+    # After the page is cut, so this costs one pass over the rows on screen
+    # rather than over every home in the Archive -- and on every view, because
+    # a price the app worked out has to say so wherever it is printed.
+    mark_price_basis(listings, _rent_table(repository))
     return ListingSelection(
         listings=listings,
         sort=sort,
@@ -342,6 +355,12 @@ def select_listings(
 CSV_COLUMNS: tuple[tuple[str, str], ...] = (
     ("Score", "score"),
     ("Price", "price"),
+    # What that number is, when it is anything but a rent the site is
+    # publishing today. The estimate is deliberately not in the Price column:
+    # a sheet is sorted, filtered and totalled, and a guess mixed in with
+    # published rents would be treated as one of them by every one of those
+    # operations. Here it can only be read with the word "Estimated" attached.
+    ("Price basis", "price_basis_label"),
     ("Size", "unit_type"),
     ("Neighborhood", "neighborhood"),
     ("Address", "title"),
@@ -409,7 +428,24 @@ def _csv_values(listing: dict) -> dict:
         "notes": " | ".join(note for note in notes if note),
         "other_source": other.get("platform"),
         "other_price": other.get("price"),
+        "price_basis_label": _price_basis_label(listing),
     }
+
+
+def _price_basis_label(listing: dict) -> str:
+    """What the Price cell beside this one is, in words, or nothing at all.
+
+    Empty for a rent the site still publishes, which is the ordinary case and
+    wants no annotation. The estimate carries its own figure, because the
+    Price column is left empty for a home nobody has priced and a number that
+    appeared there without the word would be read as an asking rent.
+    """
+    basis = listing.get("price_basis")
+    if basis == PRICE_ESTIMATED and listing.get("estimated_price") is not None:
+        return f"Estimated ${listing['estimated_price']:,} -- no rent published, this is the local median"
+    if basis == PRICE_LAST_SEEN:
+        return "Last seen price -- the source has stopped listing this home"
+    return ""
 
 
 def _reveal_folder(folder: Path) -> bool:

@@ -1,4 +1,4 @@
-"""A rent to rank by when the listing states none -- and to do nothing else with.
+"""A rent to rank by when the listing states none, and to say so wherever it shows.
 
 40 of the homes on a real board's shortlist published no rent. Scoring
 reads an unstated rent as neither in nor over budget, so those homes sat among
@@ -11,11 +11,18 @@ of the homes it holds of the same size in the same neighbourhood, and the
 dashboard ranks an unpriced home as if that were its rent. Three rules, and the
 tests hold each one:
 
-* It moves the order of the shortlist and nothing else. Whether a home is
-  eligible, whether it is on the shortlist at all, every count, the rent the
-  page prints ("Unknown") and the CSV are all computed from what the listing
-  said, never from this. An estimate that let a home past a budget would be the
-  app recommending a flat because it guessed the flat was affordable.
+* It decides the order of the shortlist and what the price column shows, and
+  nothing else. Whether a home is eligible, whether it is on the shortlist at
+  all and every count are computed from what the listing said, never from
+  this. An estimate that let a home past a budget would be the app
+  recommending a flat because it guessed the flat was affordable.
+
+  It is shown, which it was not at first: a column that printed "Unknown"
+  while the row's place in the list had been decided by a figure the reader
+  could not see was the app keeping its own reasoning to itself. What it may
+  never do is pass for the asking rent, so ``mark_price_basis`` names every
+  figure the page prints -- stated, last seen, or estimated -- and the
+  estimate appears nowhere, on the page or in the export, without the word.
 * A median, not a mean: Financial District one-bedrooms include a $349 row
   that drags any average; the median does not notice it. Of an even sample the
   higher of the two middle values, so a tie is broken towards the dearer rent.
@@ -119,6 +126,74 @@ def size_of(housing_kind: str | None, unit_type: str | None) -> str | None:
     return None
 
 
+def estimated_rent(
+    table: RentTable, neighborhood: str | None, housing_kind: str | None, unit_type: str | None
+) -> int | None:
+    """What a home of this shape, here, usually lets for -- or nothing.
+
+    The one way an estimate is ever arrived at, so the figure the price column
+    prints is by construction the figure the ranking used. A stored row with
+    no housing kind is a room, which is what the scanner's own reading of a
+    row says (``Repository._row_to_candidate``); without that the two callers
+    would quietly disagree about those rows, one estimating and one not.
+    """
+    return table.estimate(neighborhood, size_of(housing_kind or "room", unit_type))
+
+
+# Where the figure in the price column came from. Three of these four put a
+# number on the page, and only the first is the plain one: a price a site
+# published and is still publishing.
+PRICE_STATED = "stated"
+# The site's own price, from a listing its source has stopped returning
+# (``database.UNSEEN_DEMOTE_AFTER``). Still the rent that was asked; no longer
+# a rent anybody has confirmed this week.
+PRICE_LAST_SEEN = "last_seen"
+# Nobody published a rent for this home and this is the neighbourhood median.
+PRICE_ESTIMATED = "estimated"
+# No rent published and too little evidence to estimate one: the column says
+# so, as it always has.
+PRICE_UNKNOWN = "unknown"
+
+
+def mark_price_basis(listings: Iterable[dict], table: RentTable) -> None:
+    """Say of every row where its price came from, in place.
+
+    The owner's complaint, and the reason this exists: "some listings didn't
+    show price and you had a price there, if its estimated say that, if its
+    previous say that, just needs to be flagged." So each row carries
+    ``price_basis`` and, where the app is the one doing the guessing,
+    ``estimated_price`` -- and the templates print no figure without printing
+    the basis beside it.
+
+    A home another of its copies prices is not an unpriced home: the shortlist
+    already ranks it at that quote (``home_price``) and the row names the site
+    and the figure, so an estimate there would be the app talking over a rent
+    somebody actually published. That is the same test ``ranking_order``
+    applies, for the same reason.
+
+    A row that does not know whether its source is still listing the home --
+    anything not shaped by ``Repository.query_page``, such as a single
+    listing's own page -- is given the benefit of the doubt and reads as
+    stated. Absence of evidence is not evidence, here as everywhere else.
+    """
+    for item in listings:
+        item["estimated_price"] = None
+        if item.get("price") is not None:
+            item["price_basis"] = (
+                PRICE_STATED if item.get("still_listed_by_source", True) else PRICE_LAST_SEEN
+            )
+            continue
+        guess = (
+            None
+            if item.get("home_price") is not None
+            else estimated_rent(
+                table, item.get("neighborhood"), item.get("housing_kind"), item.get("unit_type")
+            )
+        )
+        item["estimated_price"] = guess
+        item["price_basis"] = PRICE_ESTIMATED if guess is not None else PRICE_UNKNOWN
+
+
 def ranking_order(listings: list[dict], copies: dict, table: RentTable, score) -> tuple[list[dict], bool]:
     """The listings in shortlist order, unpriced homes ranked by an estimated rent.
 
@@ -142,7 +217,7 @@ def ranking_order(listings: list[dict], copies: dict, table: RentTable, score) -
         home = copies.get(int(item["id"])) or []
         if item.get("price") is None and item.get("home_price") is None and home:
             shown = home[0]
-            guess = table.estimate(shown.neighborhood, size_of(shown.housing_kind, shown.unit_type))
+            guess = estimated_rent(table, shown.neighborhood, shown.housing_kind, shown.unit_type)
             if guess is not None:
                 rank = min(int(score(replace(copy, price=guess)).score) for copy in home)
                 estimated = True

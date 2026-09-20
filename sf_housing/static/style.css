@@ -664,6 +664,24 @@ select.is-selected { background: var(--surface-muted); border-color: var(--line-
 .cell-price strong { display: block; color: var(--ink); font-size: 0.86rem; }
 .cell-price span, .cell-area span, .cell-source span, .cell-found span { color: var(--muted); font-size: 0.72rem; overflow-wrap: anywhere; }
 .cell-price span { white-space: nowrap; overflow-wrap: normal; }
+/* Where a figure in this column came from, when it came from anywhere but a
+   listing the source is still publishing. The word carries the state and the
+   colour only supports it, so the two markers still read on a screen that
+   renders neither -- and the sentence opens on a click, which a keyboard and
+   a touch screen can both manage where a hover tooltip is neither. An
+   estimate is the app's own arithmetic rather than a caution about the home,
+   so it stays grey; amber is kept for the rent nobody is publishing now. */
+.cell-price .is-estimate { color: var(--muted); font-weight: 620; }
+/* The sentence is wider than its column, which is 96px and fixed, so it is
+   taken out of the flow and laid over the cells beside it rather than set as
+   ten words on ten lines. That also keeps the row the height it was: opening
+   one marker must not move every home below it down the page. */
+.price-basis { position: relative; margin-top: 3px; }
+.price-basis > summary { width: fit-content; cursor: pointer; font-size: 0.6rem; font-weight: 700; line-height: 1.2; }
+.price-basis.is-last-seen > summary { color: var(--amber); }
+.price-basis.is-estimate > summary { color: var(--muted); }
+.price-basis > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.price-basis > p { position: absolute; z-index: 5; top: calc(100% + 3px); left: 0; width: 204px; margin: 0; padding: 7px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-focus); color: var(--ink); font-size: 0.66rem; font-weight: 500; line-height: 1.36; white-space: normal; }
 .cell-source .source-name { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.3; }
 .cell-source small { display: block; margin-top: 0.28rem; color: var(--muted); font-size: 0.66rem; line-height: 1.2; }
 .cell-source .checked-badge { color: var(--accent); font-weight: 700; }

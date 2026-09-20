@@ -248,7 +248,23 @@
               <a class="quick-open" href="/listings/{{ listing.id }}/open" target="_blank" rel="noopener noreferrer" aria-label="Open {{ listing.title }}" data-mark-opened="/listings/{{ listing.id }}/opened">Open <span aria-hidden="true">↗</span></a>
             {% endif %}
           </td>
-          <td class="cell-price">{% if listing.price is not none %}<strong>${{ "{:,}".format(listing.price) }}</strong><span>{% if housing_mode == 'two_bedroom' and listing.per_person_monthly %}${{ "{:,}".format(listing.per_person_monthly) }}/person{% else %}/mo{% endif %}</span>{% else %}<span>Unknown</span>{% endif %}</td>
+          {#- Three things a figure here can be, and the reader can tell which
+              at a glance: a rent the site is still publishing, plain; the last
+              rent it published before it stopped listing the home; and one the
+              app worked out because nobody published any. Each marker opens
+              one sentence on a click rather than a hover, so the explanation
+              is reachable by keyboard and on a touch screen. -#}
+          <td class="cell-price">
+            {%- if listing.price is not none -%}
+            <strong>${{ "{:,}".format(listing.price) }}</strong><span>{% if housing_mode == 'two_bedroom' and listing.per_person_monthly %}${{ "{:,}".format(listing.per_person_monthly) }}/person{% else %}/mo{% endif %}</span>
+            {%- if listing.price_basis == 'last_seen' %}<details class="price-basis is-last-seen"><summary>Last seen</summary><p>The rent {{ listing.platform }} showed when it last listed this home, on {{ listing.last_seen|compact_pacific_date }}.</p></details>{% endif -%}
+            {%- elif listing.price_basis == 'estimated' -%}
+            <strong class="is-estimate">&#8776;${{ "{:,}".format(listing.estimated_price) }}</strong><span>/mo</span>
+            <details class="price-basis is-estimate"><summary>Estimated</summary><p>No site published a rent, so this is the median for homes its size in {{ listing.neighborhood or 'San Francisco' }}.</p></details>
+            {%- else -%}
+            <span>Unknown</span>
+            {%- endif -%}
+          </td>
           <td class="cell-area"><span>{{ listing.neighborhood or 'Unknown' }}</span>{% if listing.neighborhood_priority %}<small class="area-priority area-priority-{{ listing.neighborhood_priority }}">{% if listing.neighborhood_priority == 'dream' %}Dream area{% elif listing.neighborhood_priority == 'strong' %}Strong area{% else %}Secondary area{% endif %}</small>{% endif %}{% if listing.location_hint %}<small class="location-hint">Near {{ listing.location_hint }}</small>{% endif %}</td>
           <td class="cell-home">
             <strong>{{ listing.home_facts.primary or listing.listing_type or 'Room details unknown' }}</strong>
@@ -267,7 +283,11 @@
               <span class="meta-source">{{ listing.platform }}</span>
               {% if listing.published_at %}<span class="meta-found" title="Posted {{ listing.published_at|pacific_datetime }}">Posted {{ listing.published_at|compact_pacific_date }}</span>{% else %}<span class="meta-found is-found-date" title="{{ listing.platform }} publishes no posting date. First seen {{ listing.first_found|pacific_datetime }}">First seen {{ listing.first_found|compact_pacific_date }}</span>{% endif %}
               <span class="meta-area">{{ listing.neighborhood or 'Area unknown' }}</span>
-              <span class="meta-price">{% if listing.price is not none %}${{ "{:,}".format(listing.price) }}/mo{% if housing_mode == 'two_bedroom' and listing.per_person_monthly %}, ${{ "{:,}".format(listing.per_person_monthly) }}/person{% endif %}{% else %}Price unknown{% endif %}</span>
+              {#- The Price column is hidden at this width, so this line is the
+                  price, and it has to carry the same three states. There is no
+                  room for a marker to open here and a <details> cannot live
+                  inside a <p> at all, so each state is simply said in words. -#}
+              <span class="meta-price">{% if listing.price is not none %}${{ "{:,}".format(listing.price) }}/mo{% if housing_mode == 'two_bedroom' and listing.per_person_monthly %}, ${{ "{:,}".format(listing.per_person_monthly) }}/person{% endif %}{% if listing.price_basis == 'last_seen' %}, last seen {{ listing.last_seen|compact_pacific_date }}{% endif %}{% elif listing.price_basis == 'estimated' %}Estimated &#8776;${{ "{:,}".format(listing.estimated_price) }}/mo{% else %}Price unknown{% endif %}</span>
               {% if listing.sublease_months %}<span class="contact-signal">{{ listing.sublease_months }}-mo sublet</span>{% endif %}
               {% if listing.application_url %}<span class="contact-signal">Direct application</span>{% elif listing.direct_lister %}<span class="contact-signal">Direct lister</span>{% endif %}
               {% if listing.note or listing.other_notes %}<span class="note-indicator">Note saved</span>{% endif %}

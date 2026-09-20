@@ -2597,6 +2597,14 @@ class Repository:
             item["unseen_days"] = float(item.pop("home_unseen_days", 0.0) or 0.0)
             item["unseen_too_long"] = item["unseen_days"] > _as_days(UNSEEN_SHORTLIST_AFTER)
             item["cheap_rent_unconfirmed"] = bool(item.pop("home_cheap_rent_unconfirmed", 0))
+            # Whether the home's own source is still returning it
+            # (``UNSEEN_DEMOTE_AFTER``). The ranking below already acts on
+            # this; the price column says it in words, because a rent from a
+            # listing that has stopped appearing is the last rent anybody
+            # published rather than one the reader can turn up and pay. One
+            # line of truth for both, so the marker can never contradict the
+            # order the rows are in.
+            item["still_listed_by_source"] = item["unseen_days"] <= _as_days(UNSEEN_DEMOTE_AFTER)
             # The groups the ORDER BY above put this home in, carried on the
             # row so that whatever re-ranks these afterwards can keep them.
             # One pass does: ``rent_estimate.ranking_order`` gives an unpriced
@@ -2604,7 +2612,7 @@ class Repository:
             # threw both demotions away -- seven homes on the author's board
             # state no rent, so that pass runs on every page load of it.
             item["rank_group"] = (
-                1 if item["unseen_days"] > _as_days(UNSEEN_DEMOTE_AFTER) else 0,
+                0 if item["still_listed_by_source"] else 1,
                 1 if item["cheap_rent_unconfirmed"] else 0,
             )
             self._attach_copies(item, row, copies.get(str(row["home"]), []))

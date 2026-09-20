@@ -1566,6 +1566,15 @@ def csv_rows(text: str) -> list[list[str]]:
     return list(_csv.reader(_io.StringIO(text)))
 
 
+def csv_column(text: str, heading: str) -> list[str]:
+    """Every value under one heading, found by the heading rather than by
+    counting columns, so adding one does not break tests about quoting."""
+    import csv as _csv
+    import io as _io
+
+    return [row[heading] for row in _csv.DictReader(_io.StringIO(text))]
+
+
 def test_the_file_holds_the_homes_the_page_was_showing(tmp_path: Path) -> None:
     """The whole promise. Two routes each doing their own filtering would drift
     apart while both went on returning plausible homes, which is the one
@@ -1607,7 +1616,7 @@ def test_a_title_with_a_comma_survives_the_round_trip(tmp_path: Path) -> None:
     with TestClient(application) as client:
         export = client.get("/listings.csv?housing=room&view=active")
 
-    addresses = [row[4] for row in csv_rows(export.text)[1:]]
+    addresses = csv_column(export.text, "Address")
     assert addresses == ['Sunny room, quiet st, "big"'], addresses
 
 
@@ -1617,11 +1626,10 @@ def test_nothing_a_source_wrote_can_become_a_spreadsheet_formula() -> None:
     from sf_housing.app import listings_csv
 
     text = listings_csv([{"title": "=1+1", "note": "@SUM(A1)", "neighborhood": "-Mission"}])
-    row = csv_rows(text)[1]
 
-    assert row[4] == "'=1+1", row
-    assert row[13] == "'@SUM(A1)", row
-    assert row[3] == "'-Mission", row
+    assert csv_column(text, "Address") == ["'=1+1"], text
+    assert csv_column(text, "Note") == ["'@SUM(A1)"], text
+    assert csv_column(text, "Neighborhood") == ["'-Mission"], text
 
 
 def test_a_price_stays_a_number_a_spreadsheet_can_sort(tmp_path: Path) -> None:
@@ -1631,8 +1639,8 @@ def test_a_price_stays_a_number_a_spreadsheet_can_sort(tmp_path: Path) -> None:
     with TestClient(application) as client:
         export = client.get("/listings.csv?housing=room&view=active")
 
-    price = csv_rows(export.text)[1][1]
-    assert price == "3045", price
+    price = csv_column(export.text, "Price")
+    assert price == ["3045"], price
 
 
 def test_the_file_arrives_as_a_download_named_for_the_day(tmp_path: Path) -> None:
