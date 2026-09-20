@@ -21,6 +21,9 @@ from tests.conftest import TEST_PREFERENCES
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# Every case here reads a real capture whose lotteries have since closed.
+pytestmark = pytest.mark.usefixtures("portal_lotteries_open")
+
 
 class FakeResponse:
     def __init__(self, payload: object = None, text: str = "", status: int = 200):

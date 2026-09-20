@@ -6,6 +6,7 @@ import shutil
 import socket
 import tempfile
 import traceback
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -309,3 +310,24 @@ def repository(tmp_path: Path) -> Repository:
     instance.initialize()
     return instance
 
+
+# The day the SF portal payload in tests/fixtures was captured on, near enough:
+# before the earliest application deadline any of its records carries.
+PORTAL_CAPTURED_ON = date(2026, 9, 1)
+
+
+@pytest.fixture
+def portal_lotteries_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read the captured portal payload on a day its lotteries were still open.
+
+    The capture is real, so its application deadlines are real days, and the
+    source now refuses a lottery whose deadline has passed. Left to the wall
+    clock, the fixture would yield fewer records every week until the tests
+    about its addresses, its unit vocabulary and its neighbourhoods were
+    asserting over an empty list -- green on the day they were written and
+    meaningless by the end of the month. Pinning the day keeps the capture
+    saying what it said when it was taken.
+    """
+    monkeypatch.setattr(
+        "sf_housing.sources.today_in_san_francisco", lambda now=None: PORTAL_CAPTURED_ON
+    )

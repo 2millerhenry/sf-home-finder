@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from dataclasses import replace
 from html import unescape
 from collections.abc import Iterable
@@ -21,6 +21,7 @@ from .classification import ROOM, UNKNOWN, WHOLE_UNIT
 from .deal_profile import SF_NEIGHBORHOODS
 from .connectors import gmail_provider_key
 from .coverage import looks_blocked
+from .freshness import PACIFIC
 from .gmail_alerts import AlertEmail, GmailAlertMailbox
 from .location import (
     declared_outside_sf_area_hint,
@@ -995,6 +996,46 @@ def _offer_price(node: object, key: str = "lowPrice") -> int | None:
     return None
 
 
+def today_in_san_francisco(now: datetime | None = None) -> date:
+    """What day it is where these homes are.
+
+    Takes the moment rather than only reading the clock, because a rule about
+    the last day of something cannot be shown to hold on that last day unless
+    the clock can be held still.
+    """
+    return (now or datetime.now(UTC)).astimezone(PACIFIC).date()
+
+
+def application_deadline_passed(value: object, *, today: date | None = None) -> bool:
+    """Is the day an application had to be in by already behind us?
+
+    The city's portal states a deadline as a bare day at midnight with a UTC
+    offset -- "2026-09-19T00:00:00.000+0000" -- for a window that really
+    closes at 5pm Pacific on the day it names. So the day as written *is* the
+    deadline and must be read as written: turning the whole stamp into Pacific
+    would move it back to the evening before and close every lottery a full
+    day early.
+
+    Only the other side of the comparison has to be worked out in the portal's
+    own timezone. Read in UTC, it is already tomorrow from 5pm Pacific
+    onwards, which is exactly the hour somebody filing on their last day would
+    be told the lottery was over.
+
+    Everything unreadable answers no. An open waitlist publishes no deadline
+    at all, and a date this cannot parse is a date this does not know about;
+    in both cases the home may well still be real, and the answer here decides
+    whether anybody is shown it.
+    """
+    stated = str(value or "").strip()
+    if not stated:
+        return False
+    try:
+        deadline = date.fromisoformat(stated[:10])
+    except ValueError:
+        return False
+    return deadline < (today if today is not None else today_in_san_francisco())
+
+
 class SFHousingPortalSource:
     """Read the City of San Francisco's own below-market-rate rental portal.
 
@@ -1069,6 +1110,14 @@ class SFHousingPortalSource:
         address = _clean_text(record.get("Building_Street_Address"), 220)
         modified = self._timestamp(record.get("LastModifiedDate"))
         due = self._timestamp(record.get("Application_Due_Date"))
+        if application_deadline_passed(due):
+            # The lottery is over. The portal goes on publishing a listing for
+            # months after its applications closed, and a below-market rent
+            # nobody can apply for is the most convincing ghost a shortlist can
+            # carry -- cheap, real-looking, and in the city's own words.
+            # Refused here, where the deadline is read, so no unit type of a
+            # closed listing ever becomes a candidate.
+            return []
         units_available = record.get("Units_Available")
         reserved_for = _clean_text(record.get("Reserved_community_type"), 60)
         summaries = record.get("unitSummaries")
@@ -1113,6 +1162,15 @@ class SFHousingPortalSource:
                 "address": address,
                 "below_market_rate": True,
                 "application_due_date": due,
+                # Said out loud, rather than left for silence to imply. The
+                # end-of-scan sweep marks a home gone once its stated deadline
+                # passes, and stored metadata outlives the card it came from,
+                # so a lottery whose deadline the city later extended would
+                # keep that mark for ever and a real, open, below-market home
+                # would stay hidden. The portal publishing it with a deadline
+                # that has not passed is the portal saying applications are
+                # open, which is the one thing that can undo the mark.
+                "verified_inactive": False,
                 "units_available": units_available,
                 "sf_portal_unit_type": raw_type,
             }

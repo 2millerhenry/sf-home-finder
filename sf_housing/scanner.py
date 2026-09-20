@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 
@@ -34,6 +34,7 @@ from .sources import (
     PartialReadError,
     ScanTimeUpError,
     SourceError,
+    application_deadline_passed,
     facebook_coordinate_neighborhood,
     visible_sf_area_hint,
 )
@@ -1160,6 +1161,35 @@ class Scanner:
             )
         return archived
 
+    def _close_expired_lotteries(self, today: date | None = None) -> int:
+        """Take homes whose stated deadline to apply by has passed off the page.
+
+        The other half of refusing a closed lottery. The city's portal skips
+        them at the door now, but a board scanned before it learned to is
+        still holding them -- 156 of them on the author's own, one of them
+        second on the shortlist at 92 with a deadline two months behind it --
+        and nothing would ever have removed them, because a source quietly
+        dropping a home proves nothing and must never remove one.
+
+        Every source is asked, not only the portal: the question is whether a
+        deadline this board stores has passed, and any source that starts
+        stating one gets the same answer. Never lets the sweep cost a scan.
+        """
+        try:
+            stated = self.repository.stated_application_deadlines()
+            closed = {
+                listing_id: due
+                for listing_id, due in stated.items()
+                if application_deadline_passed(due, today=today)
+            }
+            moved = self.repository.close_expired_applications(closed)
+        except Exception:
+            LOGGER.warning("Could not close homes whose deadline to apply has passed", exc_info=True)
+            return 0
+        if moved:
+            LOGGER.info("Closed %s home(s) whose deadline to apply by has passed", moved)
+        return moved
+
     @staticmethod
     def _merge_stored(
         listing: ListingCandidate,
@@ -1522,6 +1552,7 @@ class Scanner:
 
             self.repository.finish_source_run(source_run_id, "success", seen=seen, added=added)
             self._retire_old_listings()
+            self._close_expired_lotteries()
             self.repository.finish_scan(
                 run_id,
                 "completed",
@@ -1800,6 +1831,9 @@ class Scanner:
             # that nobody starred, noted or decided about leave the page, and
             # those no site has listed for four months leave the board.
             self._retire_old_listings()
+            # And a third: a home nobody can apply for any more is not a home
+            # the shortlist may go on recommending.
+            self._close_expired_lotteries()
             total_seen, total_added, total_updated, sources_failed = self._scan_totals(main_tally, lane)
             # Read from what the sources recorded rather than from the clocks:
             # a sleep after the last source (during the sweep, say) left

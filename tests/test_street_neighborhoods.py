@@ -343,6 +343,7 @@ def _portal_fixture() -> list[dict]:
     return json.loads(path.read_text(encoding="utf-8"))["listings"]
 
 
+@pytest.mark.usefixtures("portal_lotteries_open")
 def test_a_portal_listing_now_carries_the_neighbourhood_its_address_implies() -> None:
     """The listing used to arrive with no area at all, which scored a neutral
     0.5 on the criterion that carries the most weight."""
@@ -353,6 +354,7 @@ def test_a_portal_listing_now_carries_the_neighbourhood_its_address_implies() ->
     assert all(l.neighborhood == "Nob Hill" for l in larkin)
 
 
+@pytest.mark.usefixtures("portal_lotteries_open")
 def test_most_of_a_real_portal_response_arrives_with_an_area() -> None:
     listings = _portal_listings(_portal_fixture())
     located = [l for l in listings if l.neighborhood]

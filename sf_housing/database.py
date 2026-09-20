@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from bisect import bisect_left, bisect_right
-from typing import Any, Callable, Iterator, NoReturn, Sequence, TypeVar
+from typing import Any, Callable, Iterator, Mapping, NoReturn, Sequence, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .classification import classify_listing
@@ -1375,21 +1375,40 @@ class Repository:
             settled.extend(self._settle_home(connection, key))
         return settled
 
-    @staticmethod
-    def _mark_gone_from_page(connection: sqlite3.Connection, listing_id: int, platform: str) -> None:
+    @classmethod
+    def _mark_gone_from_page(cls, connection: sqlite3.Connection, listing_id: int, platform: str) -> None:
         """Record that a flat's own page now shows a different flat.
 
-        The same verdict the recheck reaches when a page names another unit
-        (and the one scoring reads as the source saying the listing is
-        inactive), written with the scoring's own consequences so the row
-        leaves the shortlist now rather than at the next rescore. A starred
-        or noted row keeps its star and note, and says why it is gone.
+        The same verdict the recheck reaches when a page names another unit,
+        and the one scoring reads as the source saying the listing is
+        inactive.
+        """
+        cls._mark_verified_inactive(
+            connection, listing_id, f"{platform} now shows a different home on this listing's page."
+        )
+
+    @staticmethod
+    def _mark_verified_inactive(connection: sqlite3.Connection, listing_id: int, reason: str) -> bool:
+        """Write a source's own proof that a listing is inactive, with its consequences.
+
+        Scoring caps a verified-inactive home at 49 and rules it out, but a
+        stored row keeps whatever score it was last given until something
+        scores it again. Writing the verdict and its consequences together is
+        what makes the home leave the shortlist now rather than at the next
+        rescore, and a later pass reaches the same answer over again from the
+        metadata this leaves behind. A starred or noted row keeps its star and
+        note, and says why it is gone.
+
+        Answers False for a row that is no longer there, so a caller working
+        through a list it read a moment ago cannot be taken down by a home
+        deleted underneath it.
         """
         row = connection.execute(
             "SELECT metadata_json, score_details_json, eligibility_reasons_json, score FROM listings WHERE id = ?",
             (listing_id,),
         ).fetchone()
-        reason = f"{platform} now shows a different home on this listing's page."
+        if row is None:
+            return False
         metadata = {**_json_object(row["metadata_json"]), "verified_inactive": True, "verification_concern": reason}
         details = _json_object(row["score_details_json"])
         details["hard_constraints"] = [
@@ -1413,6 +1432,7 @@ class Repository:
                 listing_id,
             ),
         )
+        return True
 
     @staticmethod
     def _pin_moved_home(connection: sqlite3.Connection, listing_id: int, old_key: str) -> None:
@@ -3211,6 +3231,65 @@ class Repository:
         with self.connection() as connection:
             moved = self._age_out(connection, int(keep_days), moment)
             connection.commit()
+        return moved
+
+    def stated_application_deadlines(self) -> dict[int, str]:
+        """Every live copy that states a deadline to apply by, as it states it.
+
+        Only the rows a sweep could still act on. One already known gone needs
+        no second verdict and would have the same one written over it, and one
+        the archive has put away has left the shortlist already. A row whose
+        metadata is not JSON at all, or whose deadline is not text, states
+        nothing -- never an error that would cost the scan its sweep.
+        """
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT id, json_extract(metadata_json, '$.application_due_date') AS due
+                     FROM listings
+                    WHERE status IN ('active', 'saved')
+                      AND json_valid(metadata_json)
+                      AND json_type(metadata_json, '$.application_due_date') = 'text'
+                      AND COALESCE(json_extract(metadata_json, '$.verified_inactive'), 0) <> 1"""
+            ).fetchall()
+        return {int(row["id"]): str(row["due"]) for row in rows if row["due"]}
+
+    def close_expired_applications(self, deadlines: Mapping[int, str]) -> int:
+        """Take homes nobody can apply for any more off the shortlist. Returns rows moved.
+
+        Teaching a source to skip a closed lottery only stops it being added
+        again; the ones already stored would sit where they are for ever,
+        because a source dropping a home is absence and absence only ever
+        demotes it. A deadline the source stated itself, which has now passed,
+        is not absence: it is the source saying nobody can apply. So it is
+        written the way every other proof of a gone home is written, and the
+        home is found where every other gone home is found rather than
+        vanishing.
+
+        The caller decides which deadlines have passed, because that is a
+        question about the day it is in San Francisco rather than a question
+        about the board.
+        """
+        if not deadlines:
+            return 0
+        moved = 0
+        with self.connection() as connection:
+            # One transaction for the whole sweep, as the end-of-scan
+            # retirement takes: a star landing while it runs lands wholly
+            # before it or wholly after it, and a sweep killed part way
+            # through leaves the board as it found it rather than half judged.
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                for listing_id, due in deadlines.items():
+                    if self._mark_verified_inactive(
+                        connection,
+                        int(listing_id),
+                        f"Applications closed: the source stated a deadline of {str(due)[:10]}.",
+                    ):
+                        moved += 1
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
         return moved
 
     def mark_listing_opened(self, listing_id: int) -> bool:
