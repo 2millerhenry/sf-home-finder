@@ -24,6 +24,14 @@ tests hold each one:
   and a size with fewer than that has no estimate at all -- the home keeps the
   place its own score gives it.
 
+The same medians answer one other question, and only one: which suspiciously
+cheap home is worth spending a page read on. A rent far below what its area
+and size normally cost (``FAR_BELOW_MARKET_SHARE``) is what the scanner looks
+for when it decides whose listing page to open before the home is recommended.
+That still changes nothing about any home -- opening a page can only confirm
+one, or, when the page says the post is removed, prove it gone by the evidence
+that has always meant that.
+
 Each home is counted once however many sites list it, at the highest rent any
 of them quotes, and only homes seen in the last ``WINDOW_DAYS`` count: rents
 move, and a board kept for a year should not price this month's flats at last
@@ -49,6 +57,19 @@ from .location import canonical_neighborhood
 MINIMUM_SAMPLE = 8
 # How far back a seen home still counts towards what rents are now.
 WINDOW_DAYS = 60
+
+# What "far below what this area and size normally cost" means, as a share of
+# that median. At three fifths, a rent is 40% under what the neighbourhood
+# asks for a home of the size -- far enough that it is worth a request to
+# confirm the listing is still up before the home is recommended.
+#
+# This decides nothing about a home. It decides which page the scanner spends
+# one of its bounded reads on (see ``scanner.CHEAP_RENT_PAGES_PER_SCAN``), and
+# a page can only ever confirm a home or, saying the post is removed, prove it
+# gone. Measured on a real board of 9,615 rows: of the 140 homes on the
+# shortlist, 27 are under this line, 13 are below the hard floor for their
+# size, and the 13 that are both are the ones the scanner opens.
+FAR_BELOW_MARKET_SHARE = 0.6
 
 
 def _median(values: list[int]) -> int:
@@ -108,8 +129,13 @@ def ranking_order(listings: list[dict], copies: dict, table: RentTable, score) -
     site putting the home outside the deal still holds it down. Returns the
     reordered listings and whether any estimate was used. The listings
     themselves are never changed.
+
+    Within each of the ``rank_group`` bands the query sorted the rows into,
+    never across them. This pass is the one thing that reorders the shortlist
+    after the query has ordered it, and it used to re-sort on score alone,
+    which discarded every demotion the query had just applied.
     """
-    ranks: list[tuple[int, int]] = []
+    ranks: list[tuple[tuple[int, ...], int, int]] = []
     estimated = False
     for position, item in enumerate(listings):
         rank = int(item.get("home_score", item["score"]))
@@ -120,6 +146,11 @@ def ranking_order(listings: list[dict], copies: dict, table: RentTable, score) -
             if guess is not None:
                 rank = min(int(score(replace(copy, price=guess)).score) for copy in home)
                 estimated = True
-        ranks.append((-rank, position))
+        # The groups the query already sorted these into come first, or this
+        # pass would undo them: a home its source has stopped returning, or
+        # one priced below anything its size lets for that nobody has opened
+        # the page of, is held below the homes that raise no such question,
+        # and re-sorting on score alone put them straight back at the top.
+        ranks.append((tuple(item.get("rank_group") or ()), -rank, position))
     order = sorted(range(len(listings)), key=lambda index: ranks[index])
     return [listings[index] for index in order], estimated

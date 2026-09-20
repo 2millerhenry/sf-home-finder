@@ -26,8 +26,14 @@ from .filelock import release as release_file_lock, try_acquire as try_acquire_f
 from .freshness import source_is_in_backoff, source_key as watchdog_source_key
 from .models import ListingCandidate, ScanOutcome
 from .preferences import Preferences
+from .rent_estimate import (
+    FAR_BELOW_MARKET_SHARE,
+    WINDOW_DAYS as RENT_WINDOW_DAYS,
+    RentTable,
+    size_of,
+)
 from .rescore_marker import current_fingerprint
-from .scoring import score_listing
+from .scoring import implausible_rent, score_listing
 from .sources import (
     MONITOR_HEADERS,
     ListingSource,
@@ -118,6 +124,27 @@ RECHECK_HARD_CEILING = 250
 # hours every scan re-examines anything the previous one did not confirm, which
 # puts the worst case at sixteen hours rather than twenty-four.
 RECHECK_AFTER = timedelta(hours=7)
+
+# How many suspiciously cheap homes one source may have opened in one scan.
+#
+# A rent below the floor for a home its size costs the home its place at the
+# top of the shortlist until somebody has read its own page (see
+# ``database.CHEAP_RENT_CONFIRMED_FOR``), and this is the pass that does the
+# reading. It has to be tight, because these are homes a search is still
+# returning -- there is no silence here to justify a crawl. Measured on the
+# owner's real board: thirteen of the 140 homes on the shortlist are below
+# their floor and far enough below what their area asks to be worth a look.
+# Twice that, so a board with more of them still finishes in one scan, and
+# the queue rotates oldest-read first so nothing is starved when it does not.
+CHEAP_RENT_PAGES_PER_SCAN = 25
+
+# ...and the most of what is left of the scan the pass may hold. The count
+# alone bounds a source that answers quickly; a slow one doing twenty-five
+# reads would spend a short scan outright and the sources behind it would
+# never run. This pass goes before the recheck of absent homes, because these
+# are the homes about to be recommended, so it must not be able to spend the
+# recheck's time as well as its own.
+CHEAP_RENT_TIME_SHARE = 0.15
 
 # What the reader is told. A home nobody has confirmed for a day is not a home
 # the app can vouch for, whatever its score says.
@@ -517,6 +544,13 @@ class Scanner:
         # How long the most recent lane took to read, for the log and for
         # anybody checking the saving is real.
         self.last_lane_seconds: float | None = None
+        # What homes of each size cost in each neighbourhood, read once at the
+        # start of every scan for the pass that decides whose cheap listing is
+        # worth opening. Written before any lane starts and only read after,
+        # so the two lines share it without sharing a lock. None before the
+        # first scan, and after one that could not read it -- which that pass
+        # treats as knowing nothing about any area rather than as an answer.
+        self._scan_rent_table: RentTable | None = None
         self._progress_state: dict[str, object] = {
             "status": "idle",
             "running": False,
@@ -1076,66 +1110,211 @@ class Scanner:
             )
             if self._clock() + self.timeout_seconds > limit:
                 break
-            try:
-                refreshed = self._enrich_within_ceiling(
-                    source, client, candidate, limit=limit
-                )
-            except Exception as exc:
-                # Unreachable is not gone. Leave the home exactly as it was, and
-                # leave its confirmation date alone so it is tried again rather
-                # than counted as checked.
-                LOGGER.info(
-                    "%s could not recheck %s: %s", source.platform, candidate.original_url, exc
-                )
-                continue
-            if refreshed is candidate:
-                # The source handed back the very object it was given, so it
-                # went nowhere: eight sources ship ``enrich`` as ``return
-                # listing``, and Zumper's returns before any request whenever
-                # the rent is already known. Having an ``enrich`` attribute was
-                # read as being able to confirm, so those homes were stamped
-                # confirmed without a single request -- a SpareRoom room no
-                # search had returned since 5 September was printed as "Last
-                # confirmed 17 September" on the author's own board, and a home
-                # taken down in between would have read as current right up to
-                # the email. Nothing was read, so nothing is confirmed; the
-                # home keeps its real date and says nobody has checked it.
-                continue
-            before = facts_for_listing(candidate)
-            after = facts_for_listing(classify_listing(refreshed))
-            moved = not same_home(before, after, strict=False)
-            if moved or (
-                self.repository.is_owned(listing_id)
-                # The same page vouches for nothing once it names an address
-                # the row never had: an alert-email copy has none, and the
-                # page may have been re-let to another flat since.
-                and not same_home(before, after, strict=True, same_url=not after.address_raw)
+            if self._confirm_from_page(
+                client, source, preferences, listing_id, candidate, limit=limit
             ):
-                # The page now describes a different home, or -- for a home
-                # the user starred or noted -- no longer shows it is the same
-                # one. None of it may be written onto this row: a star on 405
-                # Laguna must not wake up on 409. Only when both are pages
-                # for one flat, and the page names another, is the flat that
-                # was here known to be gone from it; anything less proves
-                # nothing and the row is left exactly as it was.
-                if not moved or before.grain != UNIT_GRAIN or after.grain != UNIT_GRAIN:
-                    continue
-                refreshed = replace(
-                    candidate, metadata={**candidate.metadata, "verified_inactive": True}
+                checked += 1
+                if self.detail_delay_seconds:
+                    time.sleep(self.detail_delay_seconds)
+        return checked
+
+    def _confirm_from_page(
+        self,
+        client: httpx.Client,
+        source: ListingSource,
+        preferences: Preferences,
+        listing_id: int,
+        candidate: ListingCandidate,
+        *,
+        limit: float,
+    ) -> bool:
+        """Read one home's own page and store what it said. True if anything was.
+
+        The one place in the app that turns a page read into a row, shared by
+        the two passes that ask for one: the recheck of homes a search has
+        stopped returning, and the confirmation of homes priced below anything
+        their size lets for. They differ only in which homes they pick and
+        what they may spend; what a page proves is the same either way, and
+        writing it twice would let the two drift.
+
+        False, changing nothing, for every way of not getting an answer -- so
+        the home is tried again next scan rather than counted as checked.
+        """
+        try:
+            refreshed = self._enrich_within_ceiling(source, client, candidate, limit=limit)
+        except Exception as exc:
+            # Unreachable is not gone. Leave the home exactly as it was, and
+            # leave its confirmation dates alone so it is tried again rather
+            # than counted as checked.
+            LOGGER.info(
+                "%s could not recheck %s: %s", source.platform, candidate.original_url, exc
+            )
+            return False
+        if refreshed is candidate:
+            # The source handed back the very object it was given, so it
+            # went nowhere: eight sources ship ``enrich`` as ``return
+            # listing``, and Zumper's returns before any request whenever
+            # the rent is already known. Having an ``enrich`` attribute was
+            # read as being able to confirm, so those homes were stamped
+            # confirmed without a single request -- a SpareRoom room no
+            # search had returned since 5 September was printed as "Last
+            # confirmed 17 September" on the author's own board, and a home
+            # taken down in between would have read as current right up to
+            # the email. Nothing was read, so nothing is confirmed; the
+            # home keeps its real date and says nobody has checked it.
+            return False
+        before = facts_for_listing(candidate)
+        after = facts_for_listing(classify_listing(refreshed))
+        moved = not same_home(before, after, strict=False)
+        if moved or (
+            self.repository.is_owned(listing_id)
+            # The same page vouches for nothing once it names an address
+            # the row never had: an alert-email copy has none, and the
+            # page may have been re-let to another flat since.
+            and not same_home(before, after, strict=True, same_url=not after.address_raw)
+        ):
+            # The page now describes a different home, or -- for a home
+            # the user starred or noted -- no longer shows it is the same
+            # one. None of it may be written onto this row: a star on 405
+            # Laguna must not wake up on 409. Only when both are pages
+            # for one flat, and the page names another, is the flat that
+            # was here known to be gone from it; anything less proves
+            # nothing and the row is left exactly as it was.
+            if not moved or before.grain != UNIT_GRAIN or after.grain != UNIT_GRAIN:
+                return False
+            refreshed = replace(
+                candidate, metadata={**candidate.metadata, "verified_inactive": True}
+            )
+        metadata = dict(refreshed.metadata)
+        metadata["last_verified_at"] = utc_now()
+        # And separately: the page itself was read, which a search returning
+        # the home is not. Only this answers whether a rent nobody believes
+        # belongs to a listing that is still up, so it is written only when
+        # the page actually showed the home -- a page saying the post is gone
+        # has proved the opposite and is stored as that instead.
+        if metadata.get("verified_inactive") is not True:
+            metadata["page_verified_at"] = metadata["last_verified_at"]
+        refreshed = replace(classify_listing(refreshed), metadata=metadata)
+        try:
+            self.repository.update_score(
+                listing_id, score_listing(refreshed, preferences), listing=refreshed
+            )
+        except Exception:
+            LOGGER.warning("%s recheck could not be stored", source.platform, exc_info=True)
+            return False
+        return True
+
+    def _read_what_homes_cost(self) -> RentTable | None:
+        """Median rents by area and size, for the whole of one scan.
+
+        One read of the board rather than one per source: the medians run over
+        sixty days and cannot move inside a scan, and every source's cheap-rent
+        pass asks the same table. None when the board cannot be read, which
+        that pass treats as knowing nothing about any area -- so it falls back
+        to the hard floor and opens the page, because being wrong that way
+        costs a request and being wrong the other way leaves a home nobody
+        ever looks at.
+        """
+        try:
+            return RentTable.from_observations(
+                self.repository.rent_observations(RENT_WINDOW_DAYS)
+            )
+        except Exception:  # never let this cost a scan its results
+            LOGGER.warning("Could not read what homes normally cost", exc_info=True)
+            return None
+
+    def _confirm_cheap_homes(
+        self,
+        client: httpx.Client,
+        source: ListingSource,
+        preferences: Preferences,
+        *,
+        deadline: float,
+    ) -> int:
+        """Open the listing page of a home too cheap to recommend unread.
+
+        A rent below the floor for a home that size is a question the board
+        answers by ranking the home below the ones that raise none. This is
+        what lets it be answered the other way: the page is read, and a page
+        that still shows the home puts it straight back where its score says
+        it belongs. A page that says the post is gone proves it gone, through
+        the same ``verified_inactive`` that has always been the only thing
+        allowed to take a home off the shortlist -- and everything else,
+        a refusal, a timeout, an unreachable host, leaves the home exactly as
+        it was, still on the shortlist and still saying nobody has checked.
+
+        Narrow on purpose. Only homes already good enough for the shortlist,
+        only those the scorer marked below their floor, and of those only the
+        ones also far below what their own area and size normally cost
+        (``FAR_BELOW_MARKET_SHARE``) -- thirteen homes on the owner's board.
+        Never lets a page read cost the scan its results.
+        """
+        if not hasattr(source, "enrich"):
+            return 0
+        now = self._clock()
+        available = deadline - now - self.timeout_seconds
+        if available <= 0:
+            return 0
+        # One read's worth, and then a share of what is left after it.
+        # ``available`` already has that one read set aside, so this is never
+        # past the deadline the calling line works to -- and a share too thin
+        # for a single request still leaves room for one, which matters: a
+        # pass that can never make one request is the same as no pass at all,
+        # and these homes are few enough that a handful of scans clears them.
+        limit = now + self.timeout_seconds + available * CHEAP_RENT_TIME_SHARE
+        try:
+            candidates = self.repository.cheap_homes_to_confirm(
+                source.platform,
+                preferences.minimum_score,
+                limit=CHEAP_RENT_PAGES_PER_SCAN,
+                confirm_after=RECHECK_AFTER,
+            )
+        except Exception:  # confirming a rent must never cost the scan its results
+            LOGGER.warning("%s cheap-rent lookup failed", source.platform, exc_info=True)
+            return 0
+
+        table = self._scan_rent_table
+        checked = 0
+        for listing_id, candidate in candidates:
+            if self._clock() + self.timeout_seconds > limit:
+                break
+            median = (
+                table.estimate(
+                    candidate.neighborhood,
+                    size_of(candidate.housing_kind, candidate.unit_type),
                 )
-            metadata = dict(refreshed.metadata)
-            metadata["last_verified_at"] = utc_now()
-            refreshed = replace(classify_listing(refreshed), metadata=metadata)
-            try:
-                self.repository.update_score(
-                    listing_id, score_listing(refreshed, preferences), listing=refreshed
-                )
-            except Exception:
-                LOGGER.warning("%s recheck could not be stored", source.platform, exc_info=True)
+                if table is not None
+                else None
+            )
+            # An area that is simply cheap is not a rent to doubt. Two things
+            # have to be true before the median is allowed to say so.
+            #
+            # The board must know one: a neighbourhood and size it has too few
+            # homes of has no median at all, and nothing known about the area
+            # leaves the hard floor -- a statement of the same kind -- as the
+            # evidence, so the page is read. Being wrong that way costs one
+            # request; being wrong the other way leaves a home that may be
+            # real at the bottom of the shortlist with nobody going to look.
+            #
+            # And the median must be a figure the app would believe as a rent
+            # in the first place. One below the floor is not evidence that
+            # homes here are cheap; it is the same doubt over again, counted
+            # from the same rows, and a board that had collected fifty fake
+            # $1,400 three-bedrooms would otherwise have them vouch for each
+            # other and none of them ever be opened.
+            if (
+                median is not None
+                and candidate.price is not None
+                and int(candidate.price) > median * FAR_BELOW_MARKET_SHARE
+                and not implausible_rent(replace(candidate, price=median))
+            ):
                 continue
-            checked += 1
-            if self.detail_delay_seconds:
-                time.sleep(self.detail_delay_seconds)
+            if self._confirm_from_page(
+                client, source, preferences, listing_id, candidate, limit=limit
+            ):
+                checked += 1
+                if self.detail_delay_seconds:
+                    time.sleep(self.detail_delay_seconds)
         return checked
 
     def _retire_old_listings(self) -> int:
@@ -1730,6 +1909,7 @@ class Scanner:
             self._update_progress(run_id=run_id)
             LOGGER.info("Starting %s scan (run %s)", trigger, run_id)
             preferences = self.preference_loader()
+            self._scan_rent_table = self._read_what_homes_cost()
             headers = dict(MONITOR_HEADERS)
             timeout = httpx.Timeout(self.timeout_seconds, connect=min(5.0, self.timeout_seconds))
             active_sources = sources if sources is not None else self._eligible_sources(trigger)
@@ -2579,9 +2759,17 @@ class Scanner:
                 # stronger one than re-reading a single page. Stamping
                 # it here is what keeps the recheck pass aimed only at
                 # the homes nobody has heard about.
+                confirmed = {"last_verified_at": scan_started_at}
+                # A detail page this scan actually read is the stronger
+                # confirmation, and the only one that answers whether a rent
+                # nobody believes belongs to a listing still up. Written here
+                # so a cheap home the scan has just opened is not opened a
+                # second time by the pass below for the same answer.
+                if item["enriched"] and listing.metadata.get("verified_inactive") is not True:
+                    confirmed["page_verified_at"] = scan_started_at
                 listing = replace(
                     listing,
-                    metadata={**listing.metadata, "last_verified_at": scan_started_at},
+                    metadata={**listing.metadata, **confirmed},
                 )
                 _, created = self.repository.upsert_listing(listing, result, settled=settled)
                 if created:
@@ -2599,7 +2787,15 @@ class Scanner:
                 # homes a search that stopped half way did not return are not
                 # evidence of anything.
                 raise cut_short.cause
-            # Pass 4: go and look at the shortlisted homes this
+            # Pass 4: confirm the shortlisted homes whose rent is below
+            # anything their size lets for, before they are recommended.
+            # Before the recheck below, because these are homes the search
+            # did return: they are about to appear near the top of the
+            # shortlist, and there are few of them.
+            confirmed_cheap = 0 if stopped else self._confirm_cheap_homes(
+                client, source, preferences, deadline=recheck_deadline()
+            )
+            # Pass 5: go and look at the shortlisted homes this
             # search stopped returning. A listing is enriched once
             # and never revisited, so a room verified live on Monday
             # and taken down on Wednesday stayed on the shortlist
@@ -2632,6 +2828,9 @@ class Scanner:
             )
             if rechecked:
                 note = f"Rechecked {rechecked} home(s) this search no longer lists."
+                message = f"{message} {note}" if message else note
+            if confirmed_cheap:
+                note = f"Opened {confirmed_cheap} listing(s) priced below what their size lets for."
                 message = f"{message} {note}" if message else note
             if stopped:
                 message = f"{message} {stopped}" if message else stopped

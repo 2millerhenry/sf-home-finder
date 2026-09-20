@@ -257,6 +257,26 @@ UNSEEN_DEMOTE_AFTER = timedelta(hours=36)
 UNSEEN_SHORTLIST_AFTER = timedelta(days=3)
 
 
+# How long a read of a home's own page goes on vouching for a rent the app
+# does not believe.
+#
+# A rent below the floor for a home that size (scoring's
+# ``IMPLAUSIBLE_RENT_FLOOR``, recorded on the score as ``price.implausibly_low``)
+# is a question, not a verdict: cheap is the thing being searched for and some
+# of these homes are real. So it costs the home its place at the top and
+# nothing else -- it stays on the shortlist, one click from its own listing --
+# until the scanner opens that listing and finds the home still there, which
+# puts it straight back where its score says it belongs.
+#
+# Thirty-six hours for the same reason ``UNSEEN_DEMOTE_AFTER`` is: scans run
+# twice a day, so it is three missed chances. Long enough that a confirmation
+# never lapses while the scanner is running -- the scanner re-reads these
+# pages every scan, well inside this -- and short enough that a scanner which
+# has stopped running stops vouching, rather than a page read last week going
+# on recommending a rent nobody has checked since.
+CHEAP_RENT_CONFIRMED_FOR = timedelta(hours=36)
+
+
 def _confirmation_check(stamp: object) -> dict[str, str] | None:
     """The open question a home raises simply by not having been seen lately.
 
@@ -280,6 +300,47 @@ def _confirmation_check(stamp: object) -> dict[str, str] | None:
     return {
         "check": "confirmation",
         "reason": f"Not confirmed as still listed for {when}; open it before relying on it.",
+    }
+
+
+def _cheap_rent_check(price: object, score_details: dict, metadata: dict) -> dict[str, str] | None:
+    """The open question a rent below the floor for its size raises.
+
+    Nothing unless the scorer has said the rent is below the floor for a home
+    that size. When it has, the question is always worth printing: only a
+    person can settle whether a figure is a month's rent for the whole home
+    or a room's share, a weekly rate or a deposit, so it is not a question
+    reading the page answers. On the author's board ten of the thirteen homes
+    below their floor said nothing about the rent at all, because the single
+    ``concern`` sentence is chosen by a chain of elif and an unstated
+    neighbourhood wins it.
+
+    What a page read does answer is whether there is still a listing there,
+    and the sentence says which of the two is outstanding.
+
+    Worked out here rather than in the scorer for the reason the confirmation
+    check is: half of it depends on the clock, and a stored score must never
+    change meaning because time passed.
+    """
+    detail = score_details.get("price")
+    if not isinstance(detail, dict) or detail.get("implausibly_low") is not True:
+        return None
+    stamp = metadata.get("page_verified_at")
+    confirmed = False
+    if isinstance(stamp, str) and stamp:
+        try:
+            moment = datetime.fromisoformat(stamp).astimezone(UTC)
+        except ValueError:
+            moment = None
+        confirmed = moment is not None and datetime.now(UTC) - moment < CHEAP_RENT_CONFIRMED_FOR
+    amount = f"${int(price):,}/month is" if isinstance(price, (int, float)) else "This rent is"
+    unread = "" if confirmed else ", and nobody has opened the listing to confirm it is still up"
+    return {
+        "check": "rent",
+        "reason": (
+            f"{amount} below anything a home this size lets for{unread}; "
+            "confirm it is the total rent, not a room price or a deposit."
+        ),
     }
 
 
@@ -345,6 +406,11 @@ def near_miss_distance(item: dict[str, Any], minimum_score: int) -> float:
     return min(distances) if distances else float("inf")
 
 
+def _as_days(after: timedelta) -> float:
+    """``after`` as the number of days the SQL clauses below compare against."""
+    return after.total_seconds() / 86400.0
+
+
 # A copy whose site says the home is no longer listed. Never the copy a home is
 # shown by while another copy says it is still there.
 _GONE = "COALESCE(json_extract(metadata_json, '$.verified_inactive'), 0) = 1"
@@ -354,6 +420,23 @@ _GONE = "COALESCE(json_extract(metadata_json, '$.verified_inactive'), 0) = 1"
 _STALE = (
     "COALESCE(julianday('now') - julianday(COALESCE("
     "json_extract(metadata_json, '$.last_verified_at'), last_seen)), 99) > 1.0"
+)
+# A copy priced below anything a home its size lets for, whose own page nobody
+# has opened within ``CHEAP_RENT_CONFIRMED_FOR``. The rent is the scorer's
+# judgement, read back rather than worked out again here, so there is one
+# floor and not a second one written in SQL.
+#
+# Deliberately not ``last_verified_at``: every search that returns a home
+# stamps that, and a search returning a $1,125 three-bedroom is the same
+# search that returned it yesterday -- it is no answer to whether the rent is
+# real. Only ``page_verified_at``, which the scanner writes when it has
+# actually read the listing's own page and the page still showed the home,
+# counts here.
+_CHEAP_RENT_UNCONFIRMED = (
+    "COALESCE(json_extract(score_details_json, '$.price.implausibly_low'), 0) = 1"
+    " AND COALESCE(julianday('now') - julianday("
+    "json_extract(metadata_json, '$.page_verified_at')), 99) > "
+    f"{_as_days(CHEAP_RENT_CONFIRMED_FOR)}"
 )
 
 # When a copy was last actually seen: a search that returned it, or a fetch of
@@ -401,11 +484,6 @@ _UNSEEN_DAYS = (
 # is the one thing on this board that cannot be fetched again, and somebody
 # who starred a home wants to decide for themselves when to give up on it.
 _KEPT_BY_USER = "(status = 'saved' OR COALESCE(note, '') <> '')"
-
-
-def _as_days(after: timedelta) -> float:
-    """``after`` as the number of days ``_UNSEEN_DAYS`` is compared against."""
-    return after.total_seconds() / 86400.0
 
 
 # Where an application can be made directly (see ``Repository._dashboard_row``).
@@ -2379,8 +2457,17 @@ class Repository:
         # question the reader asked in so many words, and "cheapest first"
         # that puts a dearer home first is a broken sort, not a careful one.
         still_showing_first = f"(COALESCE(home_unseen_days, 0) > {_as_days(UNSEEN_DEMOTE_AFTER)}) ASC"
+        # Then homes whose rent the app believes, ahead of homes priced below
+        # anything their size lets for that nobody has opened the page of
+        # (``_CHEAP_RENT_UNCONFIRMED``). Second, because "can I still go and
+        # see it" comes before "is that rent real" -- and a demotion either
+        # way, never a removal: a $1,125 three-bedroom is exactly what the
+        # reader is hunting for and some of them are real, so it keeps its
+        # score, keeps its place on the shortlist and says on the card what
+        # has not been checked.
+        believable_rents_first = "(COALESCE(home_cheap_rent_unconfirmed, 0) = 1) ASC"
         order_by = {
-            "score": f"{still_showing_first}, home_score DESC, score DESC, confidence DESC, COALESCE(published_at, first_found) DESC",
+            "score": f"{still_showing_first}, {believable_rents_first}, home_score DESC, score DESC, confidence DESC, COALESCE(published_at, first_found) DESC",
             # By the dearest live quote: a cheaper copy is not a cheaper home.
             "price": "rank_price IS NULL, rank_price ASC, score DESC",
             # The column reads "Posted", so newest must mean newest posted.
@@ -2419,7 +2506,8 @@ class Repository:
                        {_GONE} AS gone, eligibility = 'ineligible' AS outside, {_STALE} AS stale,
                        copy_rank AS picked_rank,
                        score AS picked_score, opened_at AS picked_opened_at,
-                       {_UNSEEN_DAYS} AS picked_unseen_days
+                       {_UNSEEN_DAYS} AS picked_unseen_days,
+                       ({_CHEAP_RENT_UNCONFIRMED}) AS picked_cheap_rent
                 FROM listings{where}
             ),
             ranked AS (
@@ -2437,7 +2525,13 @@ class Repository:
                        MAX(picked_opened_at) OVER (PARTITION BY home) AS home_opened_at,
                        -- A home is still showing up while any of its copies
                        -- is, so the freshest copy speaks for the home.
-                       MIN(picked_unseen_days) OVER (PARTITION BY home) AS home_unseen_days
+                       MIN(picked_unseen_days) OVER (PARTITION BY home) AS home_unseen_days,
+                       -- And one copy priced like the rest of the market
+                       -- answers for the home: the shortlist already ranks a
+                       -- home by its dearest live quote, so it is not being
+                       -- recommended on the strength of the cheap copy and
+                       -- must not be demoted for it either.
+                       MIN(picked_cheap_rent) OVER (PARTITION BY home) AS home_cheap_rent_unconfirmed
                 FROM picked
             ),
             -- Every live copy's verdict, not only the copies this view kept:
@@ -2464,7 +2558,7 @@ class Repository:
             )"""
         select = f"""
             SELECT listings.*, ranked.home, ranked.copy_number, ranked.home_opened_at,
-                   ranked.home_unseen_days,
+                   ranked.home_unseen_days, ranked.home_cheap_rent_unconfirmed,
                    live.live_price AS home_price,
                    COALESCE(live.fresh_price, live.live_price, listings.price) AS rank_price,
                    COALESCE(live.live_score, ranked.picked_home_score) AS home_score,
@@ -2502,6 +2596,17 @@ class Repository:
             # its source's history, neither of which a single row holds.
             item["unseen_days"] = float(item.pop("home_unseen_days", 0.0) or 0.0)
             item["unseen_too_long"] = item["unseen_days"] > _as_days(UNSEEN_SHORTLIST_AFTER)
+            item["cheap_rent_unconfirmed"] = bool(item.pop("home_cheap_rent_unconfirmed", 0))
+            # The groups the ORDER BY above put this home in, carried on the
+            # row so that whatever re-ranks these afterwards can keep them.
+            # One pass does: ``rent_estimate.ranking_order`` gives an unpriced
+            # home a place by an estimated rent, and re-sorting on score alone
+            # threw both demotions away -- seven homes on the author's board
+            # state no rent, so that pass runs on every page load of it.
+            item["rank_group"] = (
+                1 if item["unseen_days"] > _as_days(UNSEEN_DEMOTE_AFTER) else 0,
+                1 if item["cheap_rent_unconfirmed"] else 0,
+            )
             self._attach_copies(item, row, copies.get(str(row["home"]), []))
             items.append(item)
         if by_closeness:
@@ -2720,6 +2825,66 @@ class Repository:
             ))
         candidates.sort(key=lambda item: (-item[0], -item[1]))
         return [(listing_id, candidate) for _, listing_id, candidate in candidates[:limit]]
+
+    def cheap_homes_to_confirm(
+        self,
+        platform: str,
+        minimum_score: int,
+        *,
+        limit: int,
+        confirm_after: timedelta,
+        now: datetime | None = None,
+    ) -> list[tuple[int, ListingCandidate]]:
+        """Shortlisted homes of one source priced below the floor for their size.
+
+        The homes the scanner should go and open before recommending them: on
+        the shortlist, so about to appear near the top, and priced below
+        anything a home that size lets for. Candidates to confirm, never homes
+        to mark gone -- absence proves nothing here and this pass never writes
+        anything by itself.
+
+        A home whose page was read within ``confirm_after`` is left out, and
+        the rest come oldest-read first, so attention rotates instead of
+        landing on the same few every scan and a page nobody has ever opened
+        goes first.
+
+        Only what SQL can decide cheaply. Whether the rent is also far below
+        what the neighbourhood asks is the caller's question, because the
+        answer lives in a table of medians rather than in the row.
+        """
+        moment = (now or datetime.now(UTC)).astimezone(UTC)
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM listings
+                    WHERE platform = ?
+                      AND status IN ('active', 'saved')
+                      AND eligibility != 'ineligible'
+                      AND score >= ?
+                      AND NOT ({_GONE})
+                      AND COALESCE(
+                            json_extract(score_details_json, '$.price.implausibly_low'), 0) = 1
+                    ORDER BY score DESC""",
+                (platform, int(minimum_score)),
+            ).fetchall()
+
+        candidates: list[tuple[float, int, ListingCandidate]] = []
+        for row in rows:
+            read = _json_object(row["metadata_json"]).get("page_verified_at")
+            age = None
+            if isinstance(read, str):
+                try:
+                    age = moment - datetime.fromisoformat(read).astimezone(UTC)
+                except ValueError:
+                    age = None
+                if age is not None and age < confirm_after:
+                    continue
+            candidates.append((
+                age.total_seconds() if age is not None else float("inf"),
+                int(row["id"]),
+                self._row_to_candidate(row),
+            ))
+        candidates.sort(key=lambda item: (-item[0], -item[1]))
+        return [(listing_id, candidate) for _, listing_id, candidate in candidates[: max(0, int(limit))]]
 
     def exclusion_summary(
         self,
@@ -3016,6 +3181,21 @@ class Repository:
         if confirmation is not None and item["eligibility"] != "ineligible":
             item["checks"] = ordered_checks(
                 [{"status": "unknown", **confirmation}]
+                + [{"status": "unknown", **entry} for entry in item["checks"]],
+                "unknown",
+            )
+        # A rent the app does not believe, that nobody has gone and looked at.
+        # Ahead of the other questions for the same reason the ordering puts
+        # the home below the ones that raise none: it is the thing most likely
+        # to make the reader stop and check before they spend an afternoon on
+        # it. On the author's board ten of the thirteen homes priced below
+        # their own floor said nothing about the rent at all, because the one
+        # ``concern`` sentence is chosen by a chain of elif and an unstated
+        # neighbourhood wins it.
+        cheap_rent = _cheap_rent_check(item.get("price"), score_details, item["metadata"])
+        if cheap_rent is not None and item["eligibility"] != "ineligible":
+            item["checks"] = ordered_checks(
+                [{"status": "unknown", **cheap_rent}]
                 + [{"status": "unknown", **entry} for entry in item["checks"]],
                 "unknown",
             )

@@ -42,14 +42,19 @@ class ScoreResult:
 # tuple keeps its place at the end rather than vanishing, so adding a constraint
 # can never silently hide it.
 #
-# "rent" is gone from this list because nothing produces it any more. It used to
-# mean "this rent is suspiciously low, confirm it before counting the home",
-# which held cheap homes out of the shortlist -- and a cheap home is the thing
-# this app is looking for. A rent that looks too good is still said on the card;
-# it is simply no longer a condition anybody has to clear.
+# "rent" is back on this list, and it is worth saying what it now is and is
+# not. It once meant "this rent is suspiciously low, confirm it before
+# counting the home", and it held cheap homes out of the shortlist -- and a
+# cheap home is the thing this app is looking for, so it was removed. It now
+# means "this rent is below anything a home this size lets for and nobody has
+# opened the listing to check", it is raised on the way to the screen rather
+# than by the scorer, and it clears nothing: the home is on the shortlist
+# whatever it says. High on the list because it is what would most change
+# what the reader does in the next minute.
 CHECK_ORDER = (
     "dealbreaker",
     "listing page",
+    "rent",
     "confirmation",
     "stay length",
     "home type",

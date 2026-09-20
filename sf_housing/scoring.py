@@ -84,6 +84,17 @@ def _implausible_rent(listing: ListingCandidate, bedrooms: int | None) -> bool:
     return int(listing.price) < floor
 
 
+def implausible_rent(listing: ListingCandidate) -> bool:
+    """Is this listing's rent below the floor for a home of its size?
+
+    The check above, under a name the rest of the app can call. One floor,
+    asked in one way, whether the caller is the scorer deciding what to write
+    on a home or the scanner deciding whether a figure is believable enough
+    to speak for the homes around it.
+    """
+    return _implausible_rent(listing, _bedrooms_of(listing))
+
+
 PRIVATE_POSITIVE = (
     "private room",
     "own room",
@@ -1253,6 +1264,20 @@ def _score_whole_unit(listing: ListingCandidate, preferences: Preferences) -> Sc
             "maximum": max_monthly,
             "over_by": max(0, int(listing.price) - max_monthly) if price_known else None,
             "main_results_eligible": price_matches,
+            # Below the floor for a home this size (IMPLAUSIBLE_RENT_FLOOR).
+            # Written down rather than only said in the concern above, because
+            # the concern is one sentence chosen by a chain of elif and an
+            # unstated neighbourhood wins it: on the author's board ten of the
+            # thirteen homes priced below their own floor never mentioned the
+            # rent at all. Everything that acts on the suspicion -- where the
+            # shortlist puts the home, the question the card asks, the page the
+            # scanner goes and opens -- reads this, so the floor is applied
+            # once and in one place.
+            #
+            # A fact, not a verdict: nothing here caps the score. Two earlier
+            # versions did, at 49 and at 79, and against a cut-off of 80 that
+            # took an entire category off the shortlist by a single point.
+            **({"implausibly_low": True} if unusually_low else {}),
         },
         "building_size": {
             "value": values["building_size"],
