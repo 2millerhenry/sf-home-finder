@@ -138,6 +138,42 @@ def test_the_status_is_what_is_checked_not_the_url(preferences) -> None:
     assert MISSION not in by_id(found(preferences, page))
 
 
+def test_only_a_card_zillow_marks_for_rent_is_read_as_a_home_to_let(preferences) -> None:
+    """A home Zillow no longer lets -- off the market, sold, or shown as the
+    home-value page that offers to let its owner claim it -- arrives in the
+    same ``listResults`` as a rental, differing only in its status. The check
+    is an allow-list for that reason, and this says so: one written as a
+    refusal of FOR_SALE alone would pass every other test in this file and
+    let every off-market card onto the board.
+
+    A card with no status at all is refused for the same reason. Zillow saying
+    nothing about what a record is, is not Zillow saying it is a rental."""
+    for status in ("OTHER", "SOLD", "RECENTLY_SOLD", "PRE_FORECLOSURE", "", None):
+        assert MISSION not in by_id(found(preferences, doctored(MISSION, statusType=status)))
+    # The gate lets a real rental through, so none of the above is passing by
+    # the reader having simply stopped reading.
+    assert MISSION in by_id(found(preferences))
+
+
+def test_a_home_whose_card_states_no_rent_is_still_read(preferences) -> None:
+    """A card without a rent is a card without a rent, never proof that the
+    home is gone. Zillow's rentals search does publish them: on the owner's
+    board 38 of 2,061 Zillow homes are stored unpriced, every one of them an
+    apartment building or a unit inside one, and Zillow's own search was still
+    returning most of them the day this was written. Refusing a card for
+    saying no rent would have hidden those 38 real homes and removed no ghost
+    at all, so both shapes the source reads are kept and simply say so."""
+    single = by_id(found(preferences, doctored(MISSION, unformattedPrice=None)))
+    assert MISSION in single
+    assert single[MISSION].price is None
+
+    quiet = [{"price": "Price Unknown", "beds": "1", "roomForRent": False}]
+    building = by_id(found(preferences, doctored(PRISM, units=quiet)))
+    assert PRISM in building
+    assert building[PRISM].price is None
+    assert "at a rent it does not publish" in (building[PRISM].summary or "")
+
+
 def test_a_home_in_another_city_is_left_on_the_page(preferences) -> None:
     """The fixture carries a real Oakland record from Zillow's Oakland page."""
     for item in found(preferences):
