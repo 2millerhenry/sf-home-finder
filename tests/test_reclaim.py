@@ -160,15 +160,20 @@ def test_a_healthy_start_is_actually_recognised_as_one() -> None:
     """
     script = installer()
 
-    # The matcher and the flag now live apart: a function that answers "yes"
-    # when the app does, and the one line that records it. Both have to be
-    # real, because either one missing leaves a gate that can only fail.
-    answers = script[script.index("answers() {") : script.index("HEALTHY=0")]
+    # The matcher and the flag live apart: a function that answers "yes" when
+    # the app does, and the one place that records it. Both have to be real,
+    # because either one missing leaves a gate that can only fail.
+    answers = script[script.index("answers() {") : script.index("start_it() {")]
     assert '"app":"sf-home-finder"' in answers and "return 0 ;;" in answers, (
         "a healthy response never returns success"
     )
-    assert "then HEALTHY=1; fi" in script, "a healthy response never marks the start as healthy"
-    assert script.index("then HEALTHY=1; fi") < script.index('if [ "$HEALTHY" != 1 ]; then')
+    # Written against what the step returns rather than a particular shape of
+    # shell. Starting the service and waiting for its first answer became one
+    # step, so the flag is set by the arm of a case that reads the step's
+    # code, and a check for the old one-line `if` failed an installer that was
+    # working -- the same "safe and wrong" this test exists to catch.
+    marked = script.index("0) HEALTHY=1 ;;")
+    assert script.index('step "Starting it up"') < marked < script.index('if [ "$HEALTHY" != 1 ]; then')
 
 
 def test_nothing_is_reclaimed_until_the_new_version_has_served_a_request() -> None:

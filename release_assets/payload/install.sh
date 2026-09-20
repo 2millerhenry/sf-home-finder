@@ -172,8 +172,16 @@ if [ -f "$DATA_DIR/housing.sqlite3" ]; then
     fail "your housing data could not be backed up first, so nothing was changed. The reason is above; free some disk space if it says the disk is full, then run this again."
 fi
 
-if [ "${SF_HOUSING_NO_LAUNCH_AGENT:-0}" != "1" ] && [ -f "$PLIST_PATH" ]; then
+# Its own step, for the same reason starting it is one: launchd sends the
+# running app a signal and waits for it to go, which on an app mid-scan is
+# seconds, and spent between two steps they are seconds with a finished tick
+# on screen and nothing moving. Never fatal -- a copy that will not stop is
+# the port check's problem, further up, and it has already passed.
+stop_the_old_copy() {
   /bin/launchctl bootout "gui/$(id -u)" "$PLIST_PATH" >/dev/null 2>&1 || true
+}
+if [ "${SF_HOUSING_NO_LAUNCH_AGENT:-0}" != "1" ] && [ -f "$PLIST_PATH" ]; then
+  step "Stopping the copy you have" 120 stop_the_old_copy || true
 fi
 
 # Start-up skips re-ranking when the board carries a mark saying this code and
@@ -323,17 +331,6 @@ PLIST
 step "Getting it ready to start" 1800 \
   /usr/bin/env SF_HOUSING_DATA_DIR="$DATA_DIR" "$RUNTIME_TARGET/bin/python" -I -m sf_housing prepare || true
 
-if [ "${SF_HOUSING_NO_LAUNCH_AGENT:-0}" = "1" ]; then
-  say "LaunchAgent installation skipped for isolated validation."
-  SF_HOUSING_APP_ROOT="$APP_ROOT" SF_HOUSING_PORT="$PORT" \
-    SF_HOUSING_LAUNCH_AGENTS_DIR="$LAUNCH_AGENTS_DIR" "$TOOLS_DIR/open.sh" --no-browser
-else
-  /bin/launchctl bootout "gui/$(id -u)" "$PLIST_PATH" >/dev/null 2>&1 || true
-  /bin/launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH" || fail "macOS could not start the login service. Run Repair and use the Desktop log if it repeats."
-  /bin/launchctl enable "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-  /bin/launchctl kickstart -k "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-fi
-
 # Waiting for the first answer. The heavy work is done by now, so a healthy
 # start is seconds; the allowance is generous because a Mac busy with Spotlight
 # indexing a brand-new runtime can still make it slow, and saying "it did not
@@ -350,8 +347,39 @@ answers() {
   done
   return 1
 }
+
+# Handing the app to launchd and waiting for its first answer are one step,
+# because they are one wait. Stopping and starting a login service takes a
+# few seconds of its own, and done outside a step it spent them with a
+# finished tick on screen and nothing moving -- which reads as an installer
+# that has hung, at the moment somebody is watching it hardest. Every second
+# of the install now sits inside a step that is counting.
+SERVICE_REFUSED=3
+start_it() {
+  if [ "${SF_HOUSING_NO_LAUNCH_AGENT:-0}" = "1" ]; then
+    say "LaunchAgent installation skipped for isolated validation."
+    SF_HOUSING_APP_ROOT="$APP_ROOT" SF_HOUSING_PORT="$PORT" \
+      SF_HOUSING_LAUNCH_AGENTS_DIR="$LAUNCH_AGENTS_DIR" "$TOOLS_DIR/open.sh" --no-browser ||
+      return "$SERVICE_REFUSED"
+  else
+    /bin/launchctl bootout "gui/$(id -u)" "$PLIST_PATH" >/dev/null 2>&1 || true
+    /bin/launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH" || return "$SERVICE_REFUSED"
+    /bin/launchctl enable "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+    /bin/launchctl kickstart -k "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+  fi
+  answers
+}
+
+# The refusal is told apart from the wait running out: launchd declining the
+# service is the installer's fault and stops it, while an app that has not
+# answered yet is the advice below, which has always been the friendlier of
+# the two and is usually right.
 HEALTHY=0
-if step "Starting it up" "$(( FIRST_ANSWER_SECONDS + 60 ))" answers; then HEALTHY=1; fi
+step "Starting it up" "$(( FIRST_ANSWER_SECONDS + 60 ))" start_it
+case $? in
+  0) HEALTHY=1 ;;
+  "$SERVICE_REFUSED") fail "macOS could not start the login service. Run Repair and use the Desktop log if it repeats." ;;
+esac
 
 if [ "$HEALTHY" != 1 ]; then
   # The install itself finished: the runtime is in place and the login service
