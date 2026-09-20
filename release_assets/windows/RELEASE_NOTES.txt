@@ -1,3 +1,37 @@
+SF Home Finder 0.5.10 for Windows x64
+
+Homes you cannot rent are off the shortlist. A Zillow page that has gone off
+the market, or that asks you to claim the home, is not a listing and is kept
+out. A city lottery leaves the day its deadline passes rather than sitting
+there until somebody notices.
+
+The price says where it came from. A rent the listing states is shown
+plainly; one remembered from the last time the home appeared is dated; one
+worked out from similar homes nearby is marked as an estimate. Each says so
+in a line you can open.
+
+A rent far below anything that size lets for is checked before it is
+promoted. If the page is still up the home keeps its place, and if the page
+is gone it is not the bargain at the top of your list.
+
+Homes are named by the part of the city they are in. One whose listing gives
+a street address but no neighbourhood is placed by the city's own address
+records -- on a real board that named 208 homes the app had nothing to say
+about, including the whole of the Sunset, which the coarser city layer cannot
+tell apart from Parkside. An area already on a home is never quietly swapped
+for another.
+
+A home its source has stopped listing sinks after a day and a half and leaves
+for Near matches after three. Two things had to be true for that to be fair.
+Only a search that reads a whole site counts, and three sites were reading one
+page of theirs and calling it San Francisco. And the days counted are days
+somebody actually looked, so a laptop shut for a weekend no longer empties the
+shortlist on Monday morning.
+
+Nothing is deleted. What leaves the shortlist is in Near matches or the
+archive, and homes you have saved or noted stay where they are.
+
+
 SF Home Finder 0.5.9 for Windows x64
 
 The install now says how far along it is, not just how long it has been
