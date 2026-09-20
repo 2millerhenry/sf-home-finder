@@ -215,7 +215,6 @@
           <th scope="col" class="cell-area">Area</th>
           <th scope="col" class="cell-home">{% if housing_mode != 'room' %}Type &amp; building{% else %}Home &amp; room{% endif %}</th>
           <th scope="col" class="cell-available"{% if sort == 'available' %} aria-sort="ascending"{% endif %}><a href="{{ sort_urls.available }}">Move-in <span aria-hidden="true">{% if sort == 'available' %}↑{% endif %}</span></a></th>
-          <th scope="col" class="cell-source">Source</th>
           <th scope="col" class="cell-listing">Listing</th>
           <th scope="col" class="cell-fit">Best matches</th>
           <th scope="col" class="cell-check">Check</th>
@@ -273,14 +272,15 @@
           <td class="cell-available">
             {% if listing.available_on %}<strong>{{ listing.available_on|compact_move_in_date }}</strong><span>available</span>{% else %}<span class="unknown">Not stated</span>{% endif %}
           </td>
-          <td class="cell-source">
-            <span class="source-name">{{ listing.platform }}</span>
-            {% if listing.was_checked_today %}<small class="checked-badge">Checked today</small>{% else %}<small>Checked {{ listing.last_seen|compact_pacific_date }}</small>{% endif %}
-          </td>
           <td class="cell-listing">
             <h3 title="{{ listing.title }}"><a class="listing-title-link" href="/listings/{{ listing.id }}?from={{ return_to|urlencode }}">{{ listing.title }}</a></h3>
             <p class="listing-compact-meta">
               <span class="meta-source">{{ listing.platform }}</span>
+              {#- When the source last showed this home. It had a column of its
+                  own that repeated the platform name, so every row said the
+                  source twice; said once, here, it is the same fact in a
+                  quarter of the width. -#}
+              {% if listing.was_checked_today %}<span class="meta-checked is-today" title="{{ listing.platform }} was still showing this home at the last check today.">Checked today</span>{% else %}<span class="meta-checked" title="{{ listing.platform }} last showed this home on {{ listing.last_seen|pacific_datetime }}.">Checked {{ listing.last_seen|compact_pacific_date }}</span>{% endif %}
               {% if listing.published_at %}<span class="meta-found" title="Posted {{ listing.published_at|pacific_datetime }}">Posted {{ listing.published_at|compact_pacific_date }}</span>{% else %}<span class="meta-found is-found-date" title="{{ listing.platform }} publishes no posting date. First seen {{ listing.first_found|pacific_datetime }}">First seen {{ listing.first_found|compact_pacific_date }}</span>{% endif %}
               <span class="meta-area">{{ listing.neighborhood or 'Area unknown' }}</span>
               {#- The Price column is hidden at this width, so this line is the

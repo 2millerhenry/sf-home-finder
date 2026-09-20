@@ -1015,7 +1015,15 @@ def test_the_posted_column_survives_a_narrow_window(tmp_path: Path) -> None:
     narrow = css[start : css.index("\n}", start)]
 
     assert "cell-found" not in narrow, "the Posted column must not hide at laptop width"
-    assert "cell-source" in narrow, "the source is already named on the listing line"
+    # The Source column used to be the one hidden here, on the grounds that the
+    # listing line already names the source. That reasoning held at every
+    # width, so the column is gone and the line carries both the name and when
+    # the source last showed the home.
+    assert "cell-source" not in css, "the Source column is gone; nothing should style it"
+    listing_line = (Path("sf_housing/templates/index.html")).read_text(encoding="utf-8")
+    assert 'class="meta-source"' in listing_line and "meta-checked" in listing_line, (
+        "the listing line has to carry the source and when it was last seen"
+    )
 
 
 def test_the_score_cell_no_longer_repeats_the_check_column(tmp_path: Path) -> None:

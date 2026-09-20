@@ -567,7 +567,6 @@ select.is-selected { background: var(--surface-muted); border-color: var(--line-
 .listing-table .cell-area { width: 114px; }
 .listing-table .cell-home { width: 148px; }
 .listing-table .cell-available { width: 102px; }
-.listing-table .cell-source { width: 96px; }
 .listing-table .cell-listing { width: 260px; }
 .listing-table .cell-fit { width: 202px; }
 .listing-table .cell-check { width: 174px; }
@@ -662,7 +661,7 @@ select.is-selected { background: var(--surface-muted); border-color: var(--line-
 .quick-open.contact-ready { box-shadow: 0 0 0 2px oklch(43% 0.09 162 / 0.14); }
 .quick-open:focus-visible, .listing-title-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .cell-price strong { display: block; color: var(--ink); font-size: 0.86rem; }
-.cell-price span, .cell-area span, .cell-source span, .cell-found span { color: var(--muted); font-size: 0.72rem; overflow-wrap: anywhere; }
+.cell-price span, .cell-area span, .cell-found span { color: var(--muted); font-size: 0.72rem; overflow-wrap: anywhere; }
 .cell-price span { white-space: nowrap; overflow-wrap: normal; }
 /* Where a figure in this column came from, when it came from anywhere but a
    listing the source is still publishing. The word carries the state and the
@@ -682,9 +681,12 @@ select.is-selected { background: var(--surface-muted); border-color: var(--line-
 .price-basis.is-estimate > summary { color: var(--muted); }
 .price-basis > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .price-basis > p { position: absolute; z-index: 5; top: calc(100% + 3px); left: 0; width: 204px; margin: 0; padding: 7px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-focus); color: var(--ink); font-size: 0.66rem; font-weight: 500; line-height: 1.36; white-space: normal; }
-.cell-source .source-name { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.3; }
-.cell-source small { display: block; margin-top: 0.28rem; color: var(--muted); font-size: 0.66rem; line-height: 1.2; }
-.cell-source .checked-badge { color: var(--accent); font-weight: 700; }
+/* When the source last showed this home, said beside the source's name on
+   the listing line. "Checked today" is the reassuring case and carries the
+   accent; an older date is quiet, because a home nobody has seen for a while
+   has already sunk down the list and does not need shouting about too. */
+.meta-checked { color: var(--muted); }
+.meta-checked.is-today { color: var(--accent); font-weight: 650; }
 .cell-found span { white-space: nowrap; }
 .cell-area span { color: var(--ink); font-weight: 590; }
 .cell-area .location-hint { display: block; margin-top: 3px; color: var(--muted); font-size: 0.68rem; font-weight: 500; line-height: 1.2; }
@@ -1417,7 +1419,7 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
      named on the listing line right next to the date, and Best matches is the
      widest column on the table, so those two give way first. Dropping both
      takes about 300px off, which is what the narrower table is set to. */
-  .listing-table .cell-source, .listing-table .cell-fit { display: none; }
+  .listing-table .cell-fit { display: none; }
   .listing-table { min-width: 1250px; }
   .listing-compact-meta .meta-source, .listing-compact-meta .meta-found { display: inline; }
 }
