@@ -25,7 +25,7 @@ from .location import split_street_address
 from .filelock import release as release_file_lock, try_acquire as try_acquire_file_lock
 from .freshness import source_is_in_backoff, source_key as watchdog_source_key
 from .models import ListingCandidate, ScanOutcome
-from .preferences import Preferences
+from .preferences import Preferences, setting_int
 from .rent_estimate import (
     FAR_BELOW_MARKET_SHARE,
     WINDOW_DAYS as RENT_WINDOW_DAYS,
@@ -41,6 +41,7 @@ from .sources import (
     ScanTimeUpError,
     SourceError,
     application_deadline_passed,
+    covers_inventory,
     facebook_coordinate_neighborhood,
     visible_sf_area_hint,
 )
@@ -197,6 +198,40 @@ def _rechecking_sources_remaining(active_sources: list[ListingSource], source_in
         and int(getattr(source, "recheck_budget", RECHECK_HARD_CEILING)) > 0
     )
     return max(1, countable)
+
+
+def _search_covered_inventory(
+    source: ListingSource,
+    preferences: Preferences,
+    found: int,
+    *,
+    cut_short: bool,
+) -> bool:
+    """Did this search look everywhere this source keeps its San Francisco homes?
+
+    The question the rule about absence turns on, and the reason it is asked
+    here rather than in SQL: only the run knows how it ended. Three things
+    have to hold, and any one of them failing means the homes this search did
+    not return were never looked for.
+
+    The source has to say its search covers its inventory at all
+    (``sources.covers_inventory``), which most of them cannot: a site that
+    serves a thousand of the two and a half thousand homes it claims, or that
+    is asked a question narrowed by the deal, answers about a slice.
+
+    The read has to have finished. A walk stopped by a refusal, or by the
+    check's own time limit, is a partial read of a source that can cover --
+    and a partial read filed as a complete one is exactly the shape of this
+    bug.
+
+    And it has to have come in under the ceiling on how many homes a source
+    may contribute. At the ceiling the search stopped counting rather than ran
+    out, so whatever was past it is unread.
+    """
+    if cut_short or not covers_inventory(source):
+        return False
+    maximum = setting_int(preferences.section("sources").get("max_results_per_source"), 250)
+    return found < maximum
 
 
 # The background line a source that opts in is read on. Named, so a thread
@@ -2621,6 +2656,10 @@ class Scanner:
                 listings, cut_short = partial.listings, partial
                 stopped = getattr(partial, "out_of_time", None)
                 if stopped:
+                    # The check ran out of its own time, which is nothing the
+                    # site did, so this is not filed as a failure. It is still
+                    # a part-read source: ``stopped`` is what keeps it from
+                    # being quoted as a search that covered anything, below.
                     cut_short = None
             source_fetched = len(listings)
             source_parsed = len(listings)
@@ -2850,6 +2889,13 @@ class Scanner:
                 hard_filtered=source_hard_filtered,
                 active=source_active,
                 archived=source_archived,
+                # Against what the search actually fetched, before the
+                # initial-discovery window thins it: the ceiling is on how
+                # many homes the source may hand over, and a read that hit it
+                # stopped short whatever was kept afterwards.
+                covered=_search_covered_inventory(
+                    source, preferences, source_fetched, cut_short=bool(stopped)
+                ),
             )
             if trigger == "initial_discovery":
                 self.repository.mark_source_initialized(source_key, "success", message)

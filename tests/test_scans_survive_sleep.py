@@ -142,6 +142,11 @@ class Walker(Stub):
     keeping what it has read when a later page is refused (the PARTIAL_WALK
     note in sf_housing/sources.py) and failing only when the first one is."""
 
+    # Shaped like one of the sources that can read its whole inventory, so
+    # that a read cut short here is distinguishable from a complete one --
+    # which is the whole question the rule about absence turns on.
+    search_covers_inventory = True
+
     def __init__(self, platform: str, *, pages: int = 50) -> None:
         super().__init__(platform)
         self.pages = pages
@@ -217,6 +222,17 @@ def source_rows(repository: Repository, run_id: int) -> dict[str, tuple[str, str
                 "SELECT platform, status, message FROM source_runs WHERE scan_run_id = ?", (run_id,)
             )
         }
+
+
+def covered(repository: Repository, run_id: int, platform: str) -> int:
+    """Whether that source's run was recorded as having covered its inventory."""
+    with repository.connection() as connection:
+        return int(
+            connection.execute(
+                "SELECT covered FROM source_runs WHERE scan_run_id = ? AND platform = ?",
+                (run_id, platform),
+            ).fetchone()["covered"]
+        )
 
 
 def homes_from(repository: Repository, platform: str) -> int:
@@ -641,6 +657,36 @@ def test_a_read_the_scan_ran_out_of_time_for_keeps_what_it_read_and_rechecks_not
     assert homes_from(repository, "Walker") == len(sent), "the pages read before the time ran out were not all kept"
     assert rechecked == ["Quick"], "the walk cut short was rechecked"
     assert outcome.sources_failed == 0
+    # A success, and still not a search of anything: the pages this walk never
+    # reached hold homes it did not look for, and the rule about absence must
+    # not read their silence as the source having dropped them.
+    assert covered(repository, outcome.run_id, "Walker") == 0
+
+
+def test_a_walk_the_scan_let_finish_is_recorded_as_having_covered_its_source(
+    repository: Repository, preferences: Preferences, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the test above, so neither of them is vacuous.
+
+    A read cut short must not claim coverage; a read that ran to the end of
+    its pages must. Without this pair the gate could be satisfied by never
+    recording coverage at all, which would quietly retire the rule instead of
+    grounding it.
+    """
+    clocks = Clocks()
+
+    def site(request: httpx.Request) -> httpx.Response:
+        clocks.take(PAGE_SECONDS)
+        return httpx.Response(200, text="<html></html>")
+
+    serve(monkeypatch, site)
+    # Few enough pages that the walk ends on its own well inside the budget.
+    scanner = scanner_for(repository, preferences, [Walker("Walker", pages=3)], clocks)
+
+    outcome = scanner.run_scan("scheduled")
+
+    assert source_rows(repository, outcome.run_id)["Walker"][0] == "success"
+    assert covered(repository, outcome.run_id, "Walker") == 1
 
 
 def test_a_source_the_scan_ran_out_of_time_for_is_not_counted_as_failing(

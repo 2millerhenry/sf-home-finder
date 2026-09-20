@@ -90,8 +90,8 @@ def stopped_appearing(repository: Repository, listing_id: int, hours: float) -> 
             (_hours_ago(0),),
         ).lastrowid
         connection.execute(
-            """INSERT INTO source_runs (scan_run_id, platform, status, started_at, listings_seen)
-               VALUES (?, 'Craigslist', 'success', ?, 40)""",
+            """INSERT INTO source_runs (scan_run_id, platform, status, started_at, listings_seen, covered)
+               VALUES (?, 'Craigslist', 'success', ?, 40, 1)""",
             (scan, _hours_ago(0)),
         )
         connection.commit()

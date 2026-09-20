@@ -317,16 +317,46 @@ def facebook_coordinate_neighborhood(location: str | None) -> str | None:
     return sf_target_coordinate_neighborhood(match.group(1), match.group(2))
 
 
+# Whether a source's search looks everywhere that source keeps its San
+# Francisco homes.
+#
+# This is the fact the app's rule about absence rests on, and it is stated
+# once per source rather than assumed, because assuming it is how a home
+# somebody could still rent quietly leaves the shortlist. A search that reads
+# a filtered slice, or stops at a wall the site puts in front of it, returns
+# without homes it never asked about; treating those homes as gone is the one
+# mistake this app has decided it will never make. So the default is False --
+# it is read with ``getattr(source, "search_covers_inventory", False)``, and a
+# source that has not thought about the question gets the answer that costs
+# nothing -- and a source may only set it True with the reason written beside
+# it. See ``database._SOURCE_LAST_SEARCHED`` for what it buys.
+#
+# A source that walks pages sets it True on the class and lowers it on itself
+# for a run that stopped early: reaching the last page of a twelve-page
+# ceiling with homes still arriving is not the end of the board, and a refusal
+# part way through a walk is not the end of it either.
 class ListingSource(Protocol):
     platform: str
     mode: str
     search_url: str
     manual_reason: str | None
     detail_budget: int
+    # Optional; see the note above this class. Absent means False.
+    search_covers_inventory: bool
 
     def search(self, client: httpx.Client, preferences: Preferences) -> list[ListingCandidate]: ...
 
     def enrich(self, client: httpx.Client, listing: ListingCandidate) -> ListingCandidate: ...
+
+
+def covers_inventory(source: object) -> bool:
+    """Did this source's search look everywhere it keeps its San Francisco homes?
+
+    The default lives here, in one place, so that adding a source is never
+    also a decision about absence: a new source says nothing and is believed
+    about nothing.
+    """
+    return bool(getattr(source, "search_covers_inventory", False))
 
 
 class GmailHousingAlertSource:
@@ -749,6 +779,9 @@ class ListingsProjectSource:
     runs_in_own_lane = True
 
     platform = "Listings Project"
+    # The public SF collection, read whole in one request. Small enough that
+    # the page is the inventory.
+    search_covers_inventory = True
     mode = "automatic"
     search_url = "https://www.listingsproject.com/real-estate/san-francisco-bay-area"
     manual_reason = None
@@ -850,6 +883,9 @@ class AbacusSource:
     runs_in_own_lane = True
 
     platform = "Abacus (small buildings)"
+    # The manager's own availability page, read whole in one request. Its
+    # vacancies are the page; there is nothing behind it to page through.
+    search_covers_inventory = True
     mode = "automatic"
     search_url = "https://abacus.appfolio.com/listings"
     manual_reason = None
@@ -1050,6 +1086,10 @@ class SFHousingPortalSource:
     runs_in_own_lane = True
 
     platform = "SF Housing Portal"
+    # One request returns the city's whole below-market-rate list, unfiltered
+    # and unpaginated, so a home missing from it is a home the city has taken
+    # down.
+    search_covers_inventory = True
     mode = "automatic"
     search_url = "https://housing.sfgov.org/listings"
     api_url = "https://housing.sfgov.org/api/v1/listings.json"
@@ -1228,6 +1268,9 @@ class ApartmentListSource:
     runs_in_own_lane = True
 
     platform = "Apartment List"
+    # One request, and the buildings are in the page's own structured data
+    # with no filter applied to the request. What is not in it is not let.
+    search_covers_inventory = True
     mode = "automatic"
     search_url = "https://www.apartmentlist.com/ca/san-francisco"
     manual_reason = None
@@ -1421,6 +1464,10 @@ class ZumperSource:
     runs_in_own_lane = True
 
     platform = "Zumper"
+    # The city-scoped schema.org feed, read whole in one request. The deal is
+    # applied to what comes back, never to what is asked for, so the feed is
+    # the same feed whatever the deal says.
+    search_covers_inventory = True
     mode = "automatic"
     search_url = "https://www.zumper.com/apartments-for-rent/san-francisco-ca"
     manual_reason = None
@@ -2500,6 +2547,11 @@ class ApartmentGuideSource:
     # 491 buildings in 45 seconds, which is the slowest healthy source here
     # and still inside the scanner's per-source ceiling.
     max_pages = 14
+    # Nothing is filtered in the request (see _page_url), the ceiling sits
+    # above the real depth, and the repeat-guard ends the walk at the last
+    # page of results, so a completed walk is the whole city list. Lowered
+    # below for the walk that ends some other way.
+    search_covers_inventory = True
 
     def _page_url(self, page: int) -> str:
         # Deliberately no bedroom or rent filter. ApartmentGuide accepts
@@ -2531,6 +2583,9 @@ class ApartmentGuideSource:
         seen: set[str] = set()
         read_a_card = False
         document = ""
+        # Claimed afresh every walk, and given up the moment this one stops
+        # somewhere other than the end of the results.
+        self.search_covers_inventory = True
 
         for page in range(1, self.max_pages + 1):
             # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
@@ -2540,6 +2595,9 @@ class ApartmentGuideSource:
                 )
             except (SourceError, httpx.TransportError):
                 if read_a_card:
+                    # Turned away part way: the pages after this one hold
+                    # buildings nobody looked at.
+                    self.search_covers_inventory = False
                     break
                 raise
             search = self._payload(document)
@@ -2572,6 +2630,10 @@ class ApartmentGuideSource:
             # building is the end of the results whatever the payload claims.
             if not fresh:
                 break
+        else:
+            # Fourteen pages read and the fourteenth still new: the walk ended
+            # at its own ceiling rather than at the end of the city list.
+            self.search_covers_inventory = False
 
         if not read_a_card:
             raise _read_nothing(self.platform, document, "structured building cards")
@@ -3046,6 +3108,11 @@ class MovotoSource:
     # soon as a page comes back the same, so headroom for a bigger inventory
     # costs one request rather than five wasted ones.
     max_pages = 45
+    # Nothing is filtered in the request, the ceiling sits above the real
+    # depth, and the repeat-guard ends the walk at the last page of results,
+    # so a completed walk really is the whole San Francisco list. Lowered
+    # below for the walk that ends some other way.
+    search_covers_inventory = True
 
     # The status that means "this is a home to let". Checked rather than
     # assumed from the URL, because the record shape is identical for a sale.
@@ -3076,6 +3143,9 @@ class MovotoSource:
         seen: set[str] = set()
         read_a_card = False
         document = ""
+        # Claimed afresh every walk, and given up the moment this one stops
+        # somewhere other than the end of the results.
+        self.search_covers_inventory = True
 
         for page in range(1, self.max_pages + 1):
             # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
@@ -3085,6 +3155,9 @@ class MovotoSource:
                 )
             except (SourceError, httpx.TransportError):
                 if read_a_card:
+                    # Turned away part way: the pages after this one hold homes
+                    # nobody looked at, and they are not missing from anything.
+                    self.search_covers_inventory = False
                     break
                 raise
             homes = self._listings(document)
@@ -3109,6 +3182,10 @@ class MovotoSource:
             # the end of the results whatever its own total claims.
             if not fresh:
                 break
+        else:
+            # Forty-five pages read and the forty-fifth still new: the walk
+            # ended at its own ceiling rather than at the end of Movoto.
+            self.search_covers_inventory = False
 
         if not read_a_card:
             raise _read_nothing(self.platform, document, "homes in its page data")
@@ -3693,6 +3770,11 @@ class UloopSource:
     # has to be read further than the first cluster: five pages found 28,
     # twelve found 51. The walk stops on its own at a page that adds nothing.
     max_pages = 12
+    # The board is asked for itself, with no filter in the request -- the
+    # bedroom floor is applied to the cards below -- and the walk stops at the
+    # page that adds nothing, which is the end of the board. Lowered below for
+    # the walk that ends some other way, which the log already described.
+    search_covers_inventory = True
 
     CARD = "div.listing-list.housing-listing"
 
@@ -3724,6 +3806,9 @@ class UloopSource:
         seen: set[str] = set()
         read_a_card = False
         document = ""
+        # Claimed afresh every walk, and given up the moment this one stops
+        # somewhere other than the end of the board.
+        self.search_covers_inventory = True
 
         for page in range(1, self.max_pages + 1):
             # PARTIAL_WALK: keep what the walk already read. See the note above _require_page.
@@ -3731,6 +3816,9 @@ class UloopSource:
                 document = _require_page(client.get(self._page_url(page)), self.platform)
             except (SourceError, httpx.TransportError):
                 if read_a_card:
+                    # Turned away part way: the pages after this one hold homes
+                    # nobody looked at.
+                    self.search_covers_inventory = False
                     break
                 raise
             cards = BeautifulSoup(document, "html.parser").select(self.CARD)
@@ -3754,8 +3842,10 @@ class UloopSource:
         else:
             # Every page was read and every one still had new homes on it, so
             # the read ended at the limit rather than at the end of the board.
-            # Said out loud: a truncated result that says nothing reads exactly
-            # like complete coverage.
+            # Said out loud, and now also said to the rule about absence: a
+            # truncated result that says nothing reads exactly like complete
+            # coverage, and the homes past page twelve are not missing.
+            self.search_covers_inventory = False
             LOGGER.info(
                 "%s stopped at its %s-page limit with homes still arriving; "
                 "raise max_pages to see further.",
@@ -4111,6 +4201,10 @@ class AvalonBaySource:
     runs_in_own_lane = True
 
     platform = "AvalonBay"
+    # AvalonBay ships its entire unit list inside its own San Francisco page,
+    # one request and no paging. The bedroom floor is applied to that list
+    # here, not asked of AvalonBay, so the list does not change with the deal.
+    search_covers_inventory = True
     mode = "automatic"
     search_url = "https://www.avaloncommunities.com/california/san-francisco-apartments/"
     manual_reason = None
@@ -4287,6 +4381,11 @@ class AppFolioSource:
     runs_in_own_lane = True
 
     platform = "AppFolio"
+    # Every manager on the list is asked for its whole listings page, and a
+    # manager that did not answer is skipped rather than read as empty -- with
+    # none of them answering the search fails outright. So the homes that come
+    # back are the homes these managers are advertising.
+    search_covers_inventory = True
     mode = "automatic"
     search_url = "https://chandlerproperties.appfolio.com/listings"
     manual_reason = None
@@ -4470,6 +4569,10 @@ class UDRSource:
     runs_in_own_lane = True
 
     platform = "UDR"
+    # UDR's San Francisco page carries every building it lets here, in one
+    # request. As with AvalonBay, the bedroom floor is applied to the cards
+    # rather than to the request.
+    search_covers_inventory = True
     mode = "automatic"
     search_url = "https://www.udr.com/san-francisco-bay-area-apartments/san-francisco/"
     origin = "https://www.udr.com"
@@ -5732,6 +5835,9 @@ class SpareRoomSource:
     # behind them. See traffic_group() for what "itself" means here.
     runs_in_own_lane = True
     platform = "SpareRoom"
+    # One request for the whole SF result page; the rooms on it are the rooms
+    # advertised.
+    search_covers_inventory = True
     mode = "automatic"
     search_url = "https://www.spareroom.com/rooms-for-rent/san_francisco?sort_by=last_updated"
     manual_reason = None

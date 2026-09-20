@@ -118,17 +118,25 @@ def searched(
     hours_ago: float = 0,
     status: str = "success",
     seen: int = 40,
+    covered: bool = True,
 ) -> None:
-    """A search of ``platform`` on record: when it ran, how it ended, what it read."""
+    """A search of ``platform`` on record: when it ran, how it ended, what it read.
+
+    ``covered`` says the search looked everywhere that source keeps its homes,
+    which is what makes a home's absence from it mean anything. True here
+    because every test in this file is about the two thresholds and needs a
+    search whose word counts; what happens when a search could not have
+    covered the home lives in tests/test_absence_needs_coverage.py.
+    """
     with repository.connection() as connection:
         scan = connection.execute(
             "INSERT INTO scan_runs (trigger, status, started_at) VALUES ('test', 'completed', ?)",
             (at(hours_ago),),
         ).lastrowid
         connection.execute(
-            """INSERT INTO source_runs (scan_run_id, platform, status, started_at, listings_seen)
-               VALUES (?, ?, ?, ?, ?)""",
-            (scan, platform, status, at(hours_ago), seen),
+            """INSERT INTO source_runs (scan_run_id, platform, status, started_at, listings_seen, covered)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (scan, platform, status, at(hours_ago), seen, 1 if covered else 0),
         )
         connection.commit()
 

@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS source_runs (
     hard_filtered INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
+    covered INTEGER NOT NULL DEFAULT 0,
     message TEXT,
     search_url TEXT
 );
@@ -491,10 +492,25 @@ _LAST_SEEN = (
 # the next such change would drain the shortlist in three days and blame the
 # homes. It costs the opposite mistake -- a source with genuinely nothing to
 # show holds its homes' clocks still -- which is the mistake this app prefers.
+#
+# ``covered = 1`` is the same argument carried to its end, and it is the one
+# that matters most. A finished search is not the same thing as a search that
+# looked everywhere: most of these sites are read page by page against a
+# ceiling, several cap what they will serve however patiently they are asked,
+# and some are asked a narrower question than the board holds answers to. A
+# home the search never reached is absent from its results for a reason that
+# has nothing to do with the home. The scanner says, per run, whether that
+# search covered the source's inventory (``sources.search_covers_inventory``);
+# only a run that did may be quoted here. Measured on a real board of 9,615
+# homes this is the difference between 3,232 homes treated as unseen and 528,
+# and the 2,704 it spares are homes no search had ever reached -- 1,979 of
+# them Craigslist's and 527 Zillow's, neither of which can read its own
+# inventory at all.
 _SOURCE_LAST_SEARCHED = (
     "(SELECT MAX(run.started_at) FROM source_runs AS run"
     "  WHERE run.platform = listings.platform"
-    "    AND run.status = 'success' AND run.listings_seen > 0)"
+    "    AND run.status = 'success' AND run.listings_seen > 0"
+    "    AND run.covered = 1)"
 )
 
 # How long a copy has gone unseen, in days, against that clock. Nothing is
@@ -940,6 +956,11 @@ class Repository:
                 "hard_filtered": "INTEGER NOT NULL DEFAULT 0",
                 "active": "INTEGER NOT NULL DEFAULT 0",
                 "archived": "INTEGER NOT NULL DEFAULT 0",
+                # Zero on every run recorded before coverage was asked about,
+                # which is the answer that costs nothing: a board upgraded
+                # today knows of no search that covered anything, so every
+                # home keeps its place until the next scan says otherwise.
+                "covered": "INTEGER NOT NULL DEFAULT 0",
             }
             for name, declaration in source_column_migrations.items():
                 if name not in source_columns:
@@ -3818,13 +3839,24 @@ class Repository:
         hard_filtered: int = 0,
         active: int = 0,
         archived: int = 0,
+        covered: bool = False,
     ) -> None:
+        """Record how a source's run ended.
+
+        ``covered`` says the one thing absence depends on: that this search
+        looked everywhere the source keeps its San Francisco homes, so a home
+        it did not return is a home it did not find rather than a home it
+        never asked about. False by default, and by default from every caller
+        that has not thought about it, because the cost of claiming coverage
+        that was never reached is a home somebody could have rented
+        disappearing off the shortlist. See ``_SOURCE_LAST_SEARCHED``.
+        """
         with self.connection() as connection:
             connection.execute(
                 """UPDATE source_runs SET status = ?, finished_at = ?, listings_seen = ?,
                    listings_added = ?, listings_updated = ?, fetched = ?, parsed = ?,
                    classified = ?, deduplicated = ?, hard_filtered = ?, active = ?,
-                   archived = ?, message = ?, provider = COALESCE(?, provider),
+                   archived = ?, covered = ?, message = ?, provider = COALESCE(?, provider),
                    source_key = COALESCE(?, source_key) WHERE id = ?""",
                 (
                     status,
@@ -3839,6 +3871,7 @@ class Repository:
                     hard_filtered,
                     active,
                     archived,
+                    1 if covered else 0,
                     message,
                     provider,
                     source_key,
