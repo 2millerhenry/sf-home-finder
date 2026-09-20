@@ -3386,6 +3386,21 @@ class Repository:
         # "city of san francisco" sat in the list beside Castro and Nob Hill
         # as though a reader could choose between them. Filtered here rather
         # than in SQL so the one definition in scoring stays the only one.
+        #
+        # The same field also arrives holding a place that is not in the city
+        # at all -- "Miami, FL", "Santa Cruz, CA", "Daly City, CA" -- and, from
+        # the sources that have a mailing address and no area, the address:
+        # "161 Albion St, # A, San Francisco, CA", "Sweeny St, San Francisco,
+        # CA". On the author's board 169 of the 395 stored strings were one or
+        # the other. None of their homes was ever reachable -- scoring's
+        # outside-SF gate keeps them off the shortlist and out of near matches
+        # -- so this only ever showed a reader choices that led nowhere.
+        #
+        # Asked of location rather than answered here, and asked narrowly:
+        # most strings that are not one of the product's own area names are
+        # Craigslist compounds this list needs. "downtown / civic / van ness"
+        # is 208 homes by itself.
+        from .location import misfiled_area_label
         from .scoring import GENERIC_LOCATIONS
 
         neighborhoods: list[str] = []
@@ -3400,6 +3415,8 @@ class Repository:
             # One entry per area however a source cased it: the filter
             # matches without regard to case, so two entries were one choice.
             if folded in GENERIC_LOCATIONS or folded in seen:
+                continue
+            if misfiled_area_label(row[0]):
                 continue
             seen.add(folded)
             neighborhoods.append(str(row[0]))

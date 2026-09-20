@@ -492,3 +492,99 @@ def sf_area_from_address(address: str | None) -> str | None:
     if position < 0 or position >= len(_STREET_NAMES):
         return None
     return _STREET_NAMES[position] or None
+
+
+# Sources write whatever they have into the area field, and not all of them
+# have an area. Two kinds of string arrive that no reader would ever pick out
+# of a neighbourhood list: a place somewhere else entirely, and a mailing
+# address. The patterns below are what tells those apart from a name.
+
+# Every state's postal abbreviation but California's, and the District. A label
+# that ends in one is an address from somewhere else -- "Miami, FL", "New York,
+# NY", "Chicago, IL" -- and needs the comma: "Downtown LA" is how a Los Angeles
+# card writes itself, but "LA" alone is also Louisiana, and a bare two letters
+# at the end of a label is not evidence of anything.
+_OTHER_STATES = (
+    "AL AK AZ AR CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT "
+    "NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC"
+).split()
+_ENDS_IN_ANOTHER_STATE = re.compile(
+    rf",\s*(?:{'|'.join(_OTHER_STATES)})(?![A-Za-z])[\s,.]*$", re.IGNORECASE
+)
+# Stricter than _STATE_SUFFIX above, which exists to trim a tail before looking
+# a name up and can afford to be loose about where "ca" starts. Here the match
+# is the whole evidence that the label is an address, so "Manteca" and "Santa
+# Monica" must not read as ending in California.
+_ENDS_IN_CALIFORNIA = re.compile(
+    r",?\s*(?<![A-Za-z])(?:CA|CALIF|CALIFORNIA)(?![A-Za-z])[\s,.]*$", re.IGNORECASE
+)
+_SAYS_SAN_FRANCISCO = re.compile(r"(?<![A-Za-z])(?:SAN\s+FRANCISCO|SF)(?![A-Za-z])", re.IGNORECASE)
+_ENDS_IN_SAN_FRANCISCO = re.compile(
+    rf",?\s*{_SAYS_SAN_FRANCISCO.pattern}[\s,.]*$", re.IGNORECASE
+)
+# The street types that only ever end a street. _STREET_TYPES knows three more
+# -- PARK, TER and WALK -- and those are also how San Francisco names places
+# people live: Holly Park, Glen Park, Midtown Terrace. A label ending in one of
+# the three is left alone whatever the street table says about it.
+_ENDS_IN_STREET_TYPE = re.compile(
+    r"(?<![A-Za-z])(?:ST|STREET|AVE|AV|AVENUE|BLVD|BOULEVARD|DR|DRIVE|RD|ROAD|LN|LANE|"
+    r"CT|COURT|PL|PLACE|WAY|WY|CIR|CIRCLE|HWY|HIGHWAY|PLZ|PLAZA|ALY|ALLEY)\.?$",
+    re.IGNORECASE,
+)
+
+
+def misfiled_area_label(label: str | None) -> str | None:
+    """Return why a stored area string names no San Francisco area, or None.
+
+    The reason is for a test or a log to quote, never for a reader: the caller
+    only needs to know there is one. Deliberately narrow, because most of the
+    strings that are not one of the product's own area names are perfectly
+    good Craigslist compounds -- "downtown / civic / van ness" carries 208 of
+    the author's homes on its own, "SOMA / south beach" 91 -- and a rule that
+    kept only canonical names would take those away to be rid of "Miami, FL".
+
+    So it answers only where the string says plainly that it is something
+    else. It cannot recognise a bare out-of-town neighbourhood ("Bushwick",
+    "Harlem", "Stockton"): nothing here knows those names, and guessing at
+    them would eventually guess at one of ours.
+    """
+    text = _WHITESPACE.sub(" ", str(label or "")).strip()
+    if not text:
+        return None
+    elsewhere = outside_sf_location_label(text) or declared_outside_sf_area_hint(text)
+    if elsewhere:
+        return elsewhere
+    if _ENDS_IN_ANOTHER_STATE.search(text):
+        return "names a state other than California"
+    # A label that spells out the state is giving a mailing address, and an
+    # address that never says San Francisco is not one: "Santa Cruz, CA",
+    # "Aromas, CA", "1371 Camilla St. Manteca, Ca.". Neither helper above
+    # catches these -- outside_sf_location_label matches a bare city name
+    # exactly, so the suffix defeats it, and the Bay Area city lists have no
+    # reason to know Aromas or Manteca.
+    if _ENDS_IN_CALIFORNIA.search(text):
+        # Unless the state was glued to one of our own area names, which is
+        # common enough that canonical_neighborhood strips it before looking a
+        # name up. "Castro, CA" is the Castro.
+        rest = _ENDS_IN_CALIFORNIA.sub("", text).strip(" ,")
+        if (
+            rest
+            and not _SAYS_SAN_FRANCISCO.search(rest)
+            and _area_fold(rest) not in _CANONICAL_AREAS
+        ):
+            return "a California address that never says San Francisco"
+    if split_street_address(text):
+        return "a street address"
+    # The same address with the house number left off, which is most of what
+    # these sources write: "Sweeny St, San Francisco, CA", "35th Ave, San
+    # Francisco, CA". split_street_address needs the number, so the street is
+    # read from its own two halves instead -- a written street type, and the
+    # city written after it, which is what makes the label an address rather
+    # than a name. Both halves are needed: Holly Park, Lake Merced, Van Ness
+    # and West Portal are all in the city's street table, and all four are
+    # places somebody lives.
+    head = _ENDS_IN_CALIFORNIA.sub("", text).strip(" ,")
+    head = _ENDS_IN_SAN_FRANCISCO.sub("", head).strip(" ,")
+    if head != text and _ENDS_IN_STREET_TYPE.search(head):
+        return "a street, not an area"
+    return None
