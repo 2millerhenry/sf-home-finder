@@ -1,3 +1,15 @@
+SF Home Finder 0.5.13 for Windows x64
+
+A Zillow home is checked as it arrives, and Zillow is left alone the rest
+of the time. Yesterday's release read twenty of its pages a scan to find the
+ones taken down; Zillow blocks by address after about thirty, and the block
+covers its search -- which is where every Zillow home comes from. So it reads
+five, and the five it reads are the homes that have just arrived, checked
+before they are ever shown as something worth acting on. If Zillow turns a
+page away, the app stops asking for the rest of them instead of reading on
+into the block.
+
+
 SF Home Finder 0.5.12 for Windows x64
 
 Homes Zillow has taken down leave the shortlist. Its search goes on
