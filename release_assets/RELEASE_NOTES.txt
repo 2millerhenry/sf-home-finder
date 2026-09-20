@@ -1,3 +1,21 @@
+SF Home Finder 0.5.11
+
+The Neighborhood filter offers neighbourhoods. It was built from whatever
+each site had written in that field, so it listed Miami, New York, Chicago
+and Daly City beside Castro and Nob Hill, along with a scattering of street
+addresses. On a real board 169 of its 394 entries led nowhere, because a home
+the app places outside San Francisco never reaches the shortlist anyway.
+Those are gone. The area names people actually use, including Craigslist's
+own "sunset / parkside" and "downtown / civic / van ness", all stay.
+
+The install draws every second it spends. Two things it does -- stopping the
+copy you already have, and handing the new one to macOS to start -- were done
+between steps rather than as steps, so the screen sat on a finished tick with
+nothing moving for seconds at a time. That is what an installer that has
+stopped working looks like. Both are now lines you can watch, and nothing
+happens off them.
+
+
 SF Home Finder 0.5.10
 
 Homes you cannot rent are off the shortlist. A Zillow page that has gone off
