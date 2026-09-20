@@ -204,6 +204,32 @@ def _dominant(tally: dict[str, int], mapping: dict[str, str]) -> str | None:
     return mapping.get(winner)
 
 
+def previous_answers() -> dict[tuple[str, str], str]:
+    """What the published table already says, as (street, block) -> area name.
+
+    A rebuild may only fill blanks. The finer layer disagrees with the coarser
+    one about roughly a thousand blocks -- it calls the 100 block of 1st Street
+    SoMa where the published table calls it the Financial District -- and both
+    answers are defensible, because the city itself publishes both. But a deal
+    names the areas someone will live in, and a home whose area is renamed out
+    of that list scores 0 and is ruled ineligible, which takes it off the
+    shortlist and off near matches too. Renaming a block therefore hides real
+    homes to win an argument about wording. So an area, once published, stands.
+    """
+    try:
+        table = json.loads(OUTPUT.read_text(encoding="utf-8"))
+        names = [str(name) for name in table["names"]]
+        streets = table["streets"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    return {
+        (str(street), str(block)): names[index]
+        for street, blocks in streets.items()
+        for block, index in blocks.items()
+        if isinstance(index, int) and 0 <= index < len(names)
+    }
+
+
 def build(rows: list[dict], region_names: dict[str, str]) -> dict:
     fine: dict[tuple[str, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
     coarse: dict[tuple[str, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -226,15 +252,24 @@ def build(rows: list[dict], region_names: dict[str, str]) -> dict:
         if found:
             fine[key][found] += count
 
+    published = previous_answers()
     names: list[str] = sorted(
-        set(FIND_TO_CANONICAL.values()) | set(ANALYSIS_TO_CANONICAL.values())
+        set(FIND_TO_CANONICAL.values())
+        | set(ANALYSIS_TO_CANONICAL.values())
+        | set(published.values())
     )
     index = {name: position for position, name in enumerate(names)}
     streets: dict[str, dict[str, int]] = defaultdict(dict)
     contested = 0
     from_fine = 0
-    for key in sorted(set(fine) | set(coarse)):
+    kept = 0
+    for key in sorted(set(fine) | set(coarse) | {(s, int(b)) for s, b in published}):
         street, block = key
+        standing = published.get((street, str(block)))
+        if standing is not None:
+            streets[street][str(block)] = index[standing]
+            kept += 1
+            continue
         canonical = _dominant(fine.get(key, {}), FIND_TO_CANONICAL)
         if canonical is not None:
             from_fine += 1
@@ -262,6 +297,7 @@ def build(rows: list[dict], region_names: dict[str, str]) -> dict:
             "name for, and must resolve to nothing."
         ),
         "dominance": DOMINANCE,
+        "blocks_kept_from_previous": kept,
         "names": names,
         "streets": {street: dict(sorted(blocks.items(), key=lambda i: int(i[0])))
                     for street, blocks in sorted(streets.items())},
@@ -278,8 +314,9 @@ def main() -> None:
     print(f"streets:  {len(table['streets'])}")
     print(f"blocks:   {blocks} ({blocks - table['contested_blocks']} resolve, "
           f"{table['contested_blocks']} contested)")
-    print(f"          {table['blocks_from_fine_layer']} answered by SF Find, the rest "
+    print(f"          {table['blocks_from_fine_layer']} newly answered by SF Find, the rest "
           f"by the analysis neighbourhoods")
+    print(f"kept:     {table['blocks_kept_from_previous']} blocks already published keep their area")
     print(f"written:  {OUTPUT} ({OUTPUT.stat().st_size / 1024:.0f} KB)")
 
 

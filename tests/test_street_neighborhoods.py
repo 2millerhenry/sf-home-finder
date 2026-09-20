@@ -110,10 +110,6 @@ FINER_THAN_THE_COARSE_LAYER = [
     ("300 Laguna Honda Blvd", "Forest Hill"),
     ("100 Santa Ana Ave", "St. Francis Wood"),
     ("1 Font Blvd", "Park Merced"),
-    ("5000 Diamond Heights Blvd", "Diamond Heights"),
-    ("1200 Vermont St", "Potrero Hill"),
-    ("500 Church St", "Mission Dolores"),
-    ("2235 Third St", "Dogpatch"),
 ]
 
 
@@ -126,6 +122,30 @@ def test_an_address_the_coarse_city_layer_could_not_place_now_names_its_area(
     816 of his 9,615 active homes had no neighbourhood, and 563 of those carried
     a street number -- "3434 Santiago St", "2691 37th Ave" -- every one of them
     in the Sunset, which the coarse layer cannot tell apart from Parkside.
+    """
+    assert sf_area_from_address(address) == expected
+
+
+# The city's finer layer would call each of these something else -- Diamond
+# Heights, Potrero Hill, Mission Dolores, Dogpatch. Every one is a fair name
+# for the block, and every one is a block the table already answered.
+ALREADY_NAMED = [
+    ("5000 Diamond Heights Blvd", "Noe Valley"),
+    ("1200 Vermont St", "Mission District"),
+    ("500 Church St", "Castro"),
+    ("2235 Third St", "Potrero Hill"),
+]
+
+
+@pytest.mark.parametrize("address,expected", ALREADY_NAMED)
+def test_a_block_the_table_already_named_keeps_that_name(address: str, expected: str) -> None:
+    """Filling blanks must not quietly re-label the rest of the city.
+
+    Adding the finer layer renamed 940 of the owner's homes -- 116 out of the
+    Mission and into SoMa -- and a deal names areas, so a renamed home fails
+    the area test outright and leaves the shortlist and near matches together.
+    The renter never learns it existed. A blank costs half the area score and
+    the home stays visible, which is the error we can afford.
     """
     assert sf_area_from_address(address) == expected
 
@@ -404,10 +424,28 @@ def _rows(street: str, block: int, tallies: list[tuple[str, str | None, int]]) -
     ]
 
 
-def _resolve(rows: list[dict], street: str, block: int) -> str | None:
-    from scripts.build_street_neighborhoods import build
+def _resolve(
+    rows: list[dict], street: str, block: int, published: dict | None = None
+) -> str | None:
+    """Build a table from these rows, behind the published table given (or none).
 
-    table = build(rows, REGION_NAMES)
+    The builder reads whatever table is already shipped and keeps its answers,
+    so a test that left it in place would be measuring the real city rather
+    than its own rows.
+    """
+    import tempfile
+
+    import scripts.build_street_neighborhoods as builder
+
+    with tempfile.TemporaryDirectory() as folder:
+        out = pathlib.Path(folder) / "sf_streets.json"
+        if published is not None:
+            out.write_text(json.dumps(published), encoding="utf-8")
+        original, builder.OUTPUT = builder.OUTPUT, out
+        try:
+            table = builder.build(rows, REGION_NAMES)
+        finally:
+            builder.OUTPUT = original
     position = table["streets"][street][str(block)]
     return None if position < 0 else table["names"][position]
 
@@ -513,7 +551,7 @@ def test_most_of_a_real_portal_response_arrives_with_an_area() -> None:
 
 
 def test_an_area_the_portal_states_itself_still_wins() -> None:
-    """The city puts the 500 block of Church St in Mission Dolores; a renter
+    """The table puts the 500 block of Church St in the Castro; a renter
     standing there would say Duboce Triangle. A name the portal publishes is
     the landlord's own account of where the building is, and it is more local
     than any boundary the city draws, so the table must not overwrite it."""
@@ -526,7 +564,7 @@ def test_an_area_the_portal_states_itself_still_wins() -> None:
         "Building_Zip_Code": "94114",
         "unitSummaries": {"general": [{"unitType": "One Bedroom", "minMonthlyRent": 2000}]},
     }
-    assert sf_area_from_address("500 Church St") == "Mission Dolores"
+    assert sf_area_from_address("500 Church St") == "Castro"
     listings = _portal_listings([record])
     assert listings and all(l.neighborhood == "Duboce Triangle" for l in listings)
 
@@ -546,3 +584,50 @@ def test_the_zip_still_answers_when_the_address_cannot() -> None:
     assert sf_area_from_address("Corner of nowhere") is None
     listings = _portal_listings([record])
     assert listings and all(l.neighborhood == "Marina" for l in listings)
+
+
+def _rebuild(tmp_path, monkeypatch, published: dict | None, rows: list[dict]) -> dict:
+    """Run the table builder against a stand-in city dataset."""
+    import scripts.build_street_neighborhoods as builder
+
+    out = tmp_path / "sf_streets.json"
+    if published is not None:
+        out.write_text(json.dumps(published), encoding="utf-8")
+    monkeypatch.setattr(builder, "OUTPUT", out)
+    return builder.build(rows, {"7": "South of Market"})
+
+
+def test_a_rebuild_never_renames_a_block_the_table_already_named(tmp_path, monkeypatch) -> None:
+    """A published area stands.
+
+    The city publishes two neighbourhood layers that disagree: the finer one
+    calls the 100 block of 1st Street SoMa, the coarser one calls it the
+    Financial District. Letting a rebuild swap in the other name takes every
+    home on that block out of a deal that asked for the Financial District --
+    it is ruled ineligible, which drops it from the shortlist and from near
+    matches. Filling a blank is the whole point of a rebuild; renaming is not.
+    """
+    published = {
+        "names": ["Financial District"],
+        "streets": {"01ST ST": {"1": 0}},
+    }
+    rows = [
+        {"street_name": "01ST", "street_type": "ST", "blk": 1, "n": 40,
+         "nhood": "Financial District", "region": "7"},
+    ]
+    table = _rebuild(tmp_path, monkeypatch, published, rows)
+    named = table["names"][table["streets"]["01ST ST"]["1"]]
+    assert named == "Financial District"
+    assert table["blocks_kept_from_previous"] == 1
+
+
+def test_a_rebuild_still_names_a_block_the_table_left_blank(tmp_path, monkeypatch) -> None:
+    """Additive-only must still add: a block with no published area gets one."""
+    published = {"names": ["Financial District"], "streets": {"01ST ST": {"1": -1}}}
+    rows = [
+        {"street_name": "01ST", "street_type": "ST", "blk": 1, "n": 40,
+         "nhood": "Financial District", "region": "7"},
+    ]
+    table = _rebuild(tmp_path, monkeypatch, published, rows)
+    assert table["names"][table["streets"]["01ST ST"]["1"]] == "SoMa"
+    assert table["blocks_kept_from_previous"] == 0
