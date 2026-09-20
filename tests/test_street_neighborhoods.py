@@ -76,16 +76,70 @@ def test_a_known_address_resolves_to_its_real_neighbourhood(address: str, expect
 def test_the_answer_is_the_city_s_own_boundary_not_local_usage() -> None:
     """A documented limit, pinned so a future change is a decision, not a slip.
 
-    These four are unanimous in the city's address data (50, 19, 17 and 55
-    records, no dissent) but differ from what a renter would call the area.
-    Assigning the city's own answer is defensible and, more importantly,
-    identical every time; guessing the vernacular one would be neither. A
-    source that states its own neighbourhood still overrides this.
+    Both of these are unanimous in the city's own data but differ from what a
+    renter would call the area. Assigning the city's answer is defensible and,
+    more importantly, identical every time; guessing the vernacular one would be
+    neither. A source that states its own neighbourhood still overrides this.
     """
-    assert sf_area_from_address("500 Church St") == "Castro"  # locally Duboce Triangle
     assert sf_area_from_address("100 Bosworth St") == "Outer Mission"  # locally Glen Park
-    assert sf_area_from_address("1200 Vermont St") == "Mission District"  # locally Potrero
     assert sf_area_from_address("500 Divisadero St") == "Hayes Valley"  # locally NoPa
+
+
+# --------------------------------------------------------------------------
+# the fine layer: the coarse one could not name a third of the city
+# --------------------------------------------------------------------------
+
+# The city's 41 "analysis neighborhoods" lump several of the product's areas
+# under one name -- "Sunset/Parkside" is three of them, "West of Twin Peaks" is
+# four -- so every block inside one of those had to be refused, and 525 streets
+# refused at every block. Each of these is a real address whose area a renter
+# would recognise, and every one of them used to answer "neighbourhood unknown".
+FINER_THAN_THE_COARSE_LAYER = [
+    ("3434 Santiago St", "Outer Sunset"),
+    ("2167 40th Ave", "Outer Sunset"),
+    ("2817 Pacheco St", "Outer Sunset"),
+    ("1500 Noriega St", "Outer Sunset"),
+    ("2691 37th Ave", "Parkside"),
+    ("2727 34th Ave", "Parkside"),
+    ("1200 Taraval St", "Parkside"),
+    ("300 Foerster St", "Sunnyside"),
+    ("100 Monterey Blvd", "Sunnyside"),
+    ("100 Lakeview Ave", "Oceanview"),
+    ("1500 Broad St", "Oceanview"),
+    ("50 West Portal Ave", "West Portal"),
+    ("300 Laguna Honda Blvd", "Forest Hill"),
+    ("100 Santa Ana Ave", "St. Francis Wood"),
+    ("1 Font Blvd", "Park Merced"),
+    ("5000 Diamond Heights Blvd", "Diamond Heights"),
+    ("1200 Vermont St", "Potrero Hill"),
+    ("500 Church St", "Mission Dolores"),
+    ("2235 Third St", "Dogpatch"),
+]
+
+
+@pytest.mark.parametrize("address,expected", FINER_THAN_THE_COARSE_LAYER)
+def test_an_address_the_coarse_city_layer_could_not_place_now_names_its_area(
+    address: str, expected: str
+) -> None:
+    """The owner's own report: homes with a full street address and no area.
+
+    816 of his 9,615 active homes had no neighbourhood, and 563 of those carried
+    a street number -- "3434 Santiago St", "2691 37th Ave" -- every one of them
+    in the Sunset, which the coarse layer cannot tell apart from Parkside.
+    """
+    assert sf_area_from_address(address) == expected
+
+
+def test_one_street_still_changes_area_as_it_crosses_the_sunset() -> None:
+    """Splitting the Sunset is the point, and the block is still the unit.
+
+    Filling the gap by calling the whole of "Sunset/Parkside" one area would
+    satisfy most of the addresses above and be wrong about the rest. Taraval St
+    runs from Parkside out to the ocean, so its blocks must not agree.
+    """
+    assert sf_area_from_address("1200 Taraval St") == "Parkside"
+    assert sf_area_from_address("3544 Taraval St") == "Outer Sunset"
+    assert sf_area_from_address("800 Irving St") == "Inner Sunset"
 
 
 # --------------------------------------------------------------------------
@@ -118,11 +172,19 @@ def test_a_block_the_city_splits_between_two_areas_resolves_to_nothing() -> None
 
 
 def test_an_area_the_product_has_no_name_for_resolves_to_nothing() -> None:
-    """The city's "Sunset/Parkside" is two of the product's areas and
-    "West of Twin Peaks" is four, so no block inside them is answered."""
-    assert sf_area_from_address("3544 Taraval St") is None
-    assert sf_area_from_address("3945 Judah St") is None
-    assert sf_area_from_address("2500 Sunset Blvd") is None
+    """Coverage stops where the product's vocabulary stops, and abstains there.
+
+    The finer city layer names 117 areas and the product knows 55 of them.
+    Dorado Ter is in Mt. Davidson Manor, this block of Ulloa St is in Laguna
+    Honda and this one of Ocean Ave is in Merced Manor -- three areas the
+    product has no name for, inside "West of Twin Peaks", which covers four of
+    the ones it does. Neither layer can answer in the product's words, so
+    neither is allowed to pick a neighbour. A realtor would call Dorado Ter
+    Ingleside; the city would not, and the guess is what this forbids.
+    """
+    assert sf_area_from_address("100 Dorado Ter") is None
+    assert sf_area_from_address("700 Ulloa St") is None
+    assert sf_area_from_address("2600 Ocean Ave") is None
 
 
 @pytest.mark.parametrize(
@@ -250,10 +312,13 @@ REAL_PORTAL_ADDRESSES = [
 ]
 
 
-def test_at_least_four_in_five_real_portal_addresses_resolve() -> None:
+def test_at_least_nine_in_ten_real_portal_addresses_resolve() -> None:
+    """The bar was four in five while a third of the city's blocks had to be
+    refused. The finer layer takes this fetch to 93%, and the bar moves with it
+    so a table that quietly goes back to abstaining is caught here."""
     located = [a for a in REAL_PORTAL_ADDRESSES if sf_area_from_address(a)]
     ratio = len(located) / len(REAL_PORTAL_ADDRESSES)
-    assert ratio >= 0.80, f"only {ratio:.0%} of real portal addresses resolved"
+    assert ratio >= 0.90, f"only {ratio:.0%} of real portal addresses resolved"
 
 
 def test_every_real_portal_address_is_at_least_readable() -> None:
@@ -315,6 +380,91 @@ def _reload_table(monkeypatch, path: pathlib.Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# the rule that builds the table: finer layer first, coarse one as a fallback
+# --------------------------------------------------------------------------
+
+# Feature ids as the address dataset's own column reports them, so the rows
+# below have the shape the build script really receives.
+REGION_NAMES = {
+    "1": "Parkside",
+    "2": "Lower Nob Hill",
+    "3": "Nob Hill",
+    "4": "Mt. Davidson Manor",
+    "5": "Inner Sunset",
+}
+
+
+def _rows(street: str, block: int, tallies: list[tuple[str, str | None, int]]) -> list[dict]:
+    """One grouped row per (analysis neighbourhood, fine region) pair."""
+    name, _, suffix = street.rpartition(" ")
+    return [
+        {"street_name": name, "street_type": suffix, "nhood": coarse,
+         "region": region, "blk": str(block), "n": str(count)}
+        for coarse, region, count in tallies
+    ]
+
+
+def _resolve(rows: list[dict], street: str, block: int) -> str | None:
+    from scripts.build_street_neighborhoods import build
+
+    table = build(rows, REGION_NAMES)
+    position = table["streets"][street][str(block)]
+    return None if position < 0 else table["names"][position]
+
+
+def test_the_finer_layer_answers_a_block_the_coarse_one_can_only_lump() -> None:
+    """The whole fix. "Sunset/Parkside" is three of the product's areas, so the
+    coarse layer had to refuse every block in it; the finer layer names
+    Parkside outright and is asked first."""
+    rows = _rows("TARAVAL ST", 12, [("Sunset/Parkside", "1", 40)])
+    assert _resolve(rows, "TARAVAL ST", 12) == "Parkside"
+
+
+def test_a_block_the_finer_layer_cannot_settle_still_gets_the_coarse_answer() -> None:
+    """The fallback is what makes this safe to ship: the finer layer splits
+    this block evenly between Nob Hill and Lower Nob Hill, and the coarse layer
+    is unanimous, so the answer the table gave before the change survives."""
+    rows = _rows("PINE ST", 9, [("Nob Hill", "2", 20), ("Nob Hill", "3", 20)])
+    assert _resolve(rows, "PINE ST", 9) == "Nob Hill"
+
+
+def test_a_finer_area_the_product_cannot_name_falls_back_instead_of_guessing() -> None:
+    """Sixty-odd of the city's 117 areas have no counterpart in the product's
+    vocabulary. A block inside one asks the coarse layer next, and if that
+    cannot say either -- "West of Twin Peaks" is four of the product's areas --
+    the block is contested, never rounded to the nearest known area."""
+    named = _rows("POST ST", 7, [("Tenderloin", "2", 30)])
+    assert _resolve(named, "POST ST", 7) == "Tenderloin"
+
+    unnamed = _rows("DORADO TER", 1, [("West of Twin Peaks", "4", 38)])
+    assert _resolve(unnamed, "DORADO TER", 1) is None
+
+
+def test_the_dominance_bar_is_the_same_for_both_layers() -> None:
+    """Coverage must not be bought by lowering the bar. A block the finer layer
+    calls Parkside in four addresses out of five is answered; one that calls it
+    Parkside in three out of four with nothing else to fall back on is not."""
+    at_the_bar = _rows("ULLOA ST", 20, [("Sunset/Parkside", "1", 8), ("Sunset/Parkside", "5", 2)])
+    assert _resolve(at_the_bar, "ULLOA ST", 20) == "Parkside"
+
+    below_it = _rows("ULLOA ST", 21, [("Sunset/Parkside", "1", 6), ("Sunset/Parkside", "5", 2)])
+    assert _resolve(below_it, "ULLOA ST", 21) is None
+
+
+def test_the_table_only_ever_names_areas_the_product_knows() -> None:
+    """Both mappings feed one name list, and a name nothing can score must
+    never reach it -- the resolver's own guard is the second line, not the
+    first."""
+    from scripts.build_street_neighborhoods import (
+        ANALYSIS_TO_CANONICAL,
+        FIND_TO_CANONICAL,
+    )
+
+    produced = set(FIND_TO_CANONICAL.values()) | set(ANALYSIS_TO_CANONICAL.values())
+    assert produced <= set(SF_NEIGHBORHOODS), sorted(produced - set(SF_NEIGHBORHOODS))
+
+
+# --------------------------------------------------------------------------
 # what the renter actually sees: the portal listing carries an area
 # --------------------------------------------------------------------------
 
@@ -363,21 +513,22 @@ def test_most_of_a_real_portal_response_arrives_with_an_area() -> None:
 
 
 def test_an_area_the_portal_states_itself_still_wins() -> None:
-    """The city's address data folds Dogpatch into Potrero Hill. A name the
-    portal publishes is more specific than the table, so it must not be
-    overwritten by it."""
+    """The city puts the 500 block of Church St in Mission Dolores; a renter
+    standing there would say Duboce Triangle. A name the portal publishes is
+    the landlord's own account of where the building is, and it is more local
+    than any boundary the city draws, so the table must not overwrite it."""
     record = {
-        "Id": "test-dogpatch",
+        "Id": "test-duboce",
         "Tenure": "Re-rental",
-        "Name": "Dogpatch Lofts",
-        "Building_Street_Address": "2235 Third St",
+        "Name": "Duboce Triangle Apartments",
+        "Building_Street_Address": "500 Church St",
         "Building_City": "San Francisco",
-        "Building_Zip_Code": "94107",
+        "Building_Zip_Code": "94114",
         "unitSummaries": {"general": [{"unitType": "One Bedroom", "minMonthlyRent": 2000}]},
     }
-    assert sf_area_from_address("2235 Third St") == "Potrero Hill"
+    assert sf_area_from_address("500 Church St") == "Mission Dolores"
     listings = _portal_listings([record])
-    assert listings and all(l.neighborhood == "Dogpatch" for l in listings)
+    assert listings and all(l.neighborhood == "Duboce Triangle" for l in listings)
 
 
 def test_the_zip_still_answers_when_the_address_cannot() -> None:

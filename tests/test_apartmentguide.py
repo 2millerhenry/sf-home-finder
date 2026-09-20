@@ -23,6 +23,7 @@ import pytest
 import yaml
 
 from sf_housing.classification import WHOLE_UNIT
+from sf_housing.location import sf_area_from_address
 from sf_housing.preferences import Preferences, parse_preferences
 from sf_housing.sources import (
     ApartmentGuideSource,
@@ -664,11 +665,18 @@ def test_a_building_with_no_name_falls_back_to_its_street(preferences) -> None:
 
 def test_the_neighbourhood_is_resolved_from_the_address(preferences) -> None:
     """Out-of-area is a hard fail in scoring, so a listing that resolves to
-    nothing is a listing that can never be ranked properly."""
+    nothing is a listing that can never be ranked properly.
+
+    2235 3rd St used to come back as Potrero Hill, because the city's coarse
+    neighbourhood layer has no Dogpatch; the finer one does. The address is
+    read before the building's name here, so the answer is the table's own and
+    not the word "Dogpatch" in "Brick + Iron Lofts at Dogpatch".
+    """
     listings = by_id(found(preferences))
     assert listings[GEARY].neighborhood == "Tenderloin"
     assert listings[MT_SUTRO].neighborhood == "Inner Sunset"
-    assert listings[DOGPATCH].neighborhood == "Potrero Hill"
+    assert listings[DOGPATCH].neighborhood == "Dogpatch"
+    assert sf_area_from_address("2235 3rd St") == "Dogpatch"
 
 
 def test_the_map_pin_resolves_a_neighbourhood_the_address_cannot(preferences) -> None:
