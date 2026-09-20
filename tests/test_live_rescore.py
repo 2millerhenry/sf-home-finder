@@ -610,3 +610,55 @@ def test_a_scan_whose_new_card_joins_an_aged_copy_to_a_starred_home_scores_that_
     assert key(repository, twin) == key(repository, starred), "the card joined the twin to the starred home"
     assert state(repository, twin) == ("saved", "user"), "and the home's star reached it"
     assert stored_verdict(repository, twin) == deal_verdict(twin_card), "a starred copy holds an older deal's verdict"
+
+
+def test_a_stored_home_with_no_area_gets_one_from_the_address_it_already_carries(
+    repository: Repository, preferences: Preferences
+) -> None:
+    """An area must not depend on the day a home was found.
+
+    A card's area is worked out from its address when the card is first read,
+    so every home stored before the street table could place its block kept a
+    blank area for ever -- 44 of the 98 homes on the owner's shortlist, 36 of
+    them Zillow's, each one carrying a street address the table can name. They
+    sat there scoring half marks for an unknown area while the table knew the
+    answer. Nothing is fetched: the address is already on the row.
+    """
+    listing_id = put(repository, card("Zillow", "sunset", "https://www.zillow.com/homedetails/x/s_zpid/",
+                                      "2817 Pacheco St"))
+    with repository.connection() as connection:
+        connection.execute("UPDATE listings SET neighborhood = '' WHERE id = ?", (listing_id,))
+        connection.commit()
+
+    Scanner(repository, lambda: preferences, [], detail_delay_seconds=0).rescore_all(preferences)
+
+    with repository.connection() as connection:
+        area = connection.execute(
+            "SELECT neighborhood FROM listings WHERE id = ?", (listing_id,)
+        ).fetchone()["neighborhood"]
+    assert area == "Outer Sunset"
+
+
+def test_a_stored_home_the_table_cannot_place_is_left_without_an_area(
+    repository: Repository, preferences: Preferences
+) -> None:
+    """The backfill fills blanks; it does not guess at them.
+
+    A block the city splits between two areas answers nothing, and a home on
+    one keeps its unknown area -- which costs it half the area score and keeps
+    it on the board -- rather than being handed whichever neighbour won by a
+    vote.
+    """
+    listing_id = put(repository, card("Zillow", "nowhere", "https://www.zillow.com/homedetails/x/n_zpid/",
+                                      "1 Nonexistent Parkway"))
+    with repository.connection() as connection:
+        connection.execute("UPDATE listings SET neighborhood = '' WHERE id = ?", (listing_id,))
+        connection.commit()
+
+    Scanner(repository, lambda: preferences, [], detail_delay_seconds=0).rescore_all(preferences)
+
+    with repository.connection() as connection:
+        area = connection.execute(
+            "SELECT neighborhood FROM listings WHERE id = ?", (listing_id,)
+        ).fetchone()["neighborhood"]
+    assert area == ""

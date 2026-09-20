@@ -43,6 +43,7 @@ from .sources import (
     application_deadline_passed,
     covers_inventory,
     facebook_coordinate_neighborhood,
+    sf_area_from_address,
     visible_sf_area_hint,
 )
 
@@ -3150,6 +3151,19 @@ class Scanner:
                     )
                     if visible_area:
                         listing = replace(listing, neighborhood=visible_area)
+                if not listing.neighborhood:
+                    # A home's area is worked out from its address when the
+                    # card is first read, so one stored before the street
+                    # table could place its block keeps a blank area for ever.
+                    # On the owner's board that was 44 of the 98 homes on the
+                    # shortlist -- 36 of them Zillow's -- every one carrying a
+                    # street address the table can name. The address is
+                    # already here, so this asks nobody for anything; it just
+                    # stops a home's area depending on the day it was found.
+                    from_address = sf_area_from_address(str(listing.metadata.get("address") or ""))
+                    if from_address:
+                        visible_area = from_address
+                        listing = replace(listing, neighborhood=from_address)
                 listing = classify_listing(listing)
                 result = score_listing(listing, active_preferences)
                 matched_neighborhood = result.details.get("neighborhood", {}).get("match_label")
