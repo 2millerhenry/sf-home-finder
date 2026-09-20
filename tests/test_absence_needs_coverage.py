@@ -45,6 +45,7 @@ from tests.test_unseen_homes import (
     home,
     near_matches,
     searched,
+    searching_all_along,
     shortlist,
 )
 
@@ -99,7 +100,7 @@ def test_a_home_a_covering_search_stopped_returning_leaves_the_shortlist(
     a home has said something, and the home moves to Near matches as before.
     """
     home(repository, "really_gone_quiet", seen=SHORTLIST_HOURS + 48, score=92)
-    searched(repository, covered=True)
+    searching_all_along(repository, SHORTLIST_HOURS + 48, covered=True)
 
     assert shortlist(repository) == []
     assert near_matches(repository) == ["really_gone_quiet"]

@@ -513,12 +513,37 @@ _SOURCE_LAST_SEARCHED = (
     "    AND run.covered = 1)"
 )
 
+# The first covering search that came back without this home -- when its
+# absence was first witnessed, rather than when the home was last seen.
+#
+# Stopping the clock during an outage is only half of it. A source dark for
+# five days answers again, and measuring from the home's own last_seen hands
+# every home that has rotated off a five-day absence on the strength of one
+# search -- straight past "ranks below" and out to near matches, on a single
+# observation, for homes that were never checked while the site was down. The
+# two are the same thing while a source is running normally, because there is
+# a run every hour and the first one to miss a home follows it closely. They
+# come apart exactly where the catch-up happens, which is where it matters.
+_FIRST_SEARCH_MISSING = (
+    "(SELECT MIN(run.started_at) FROM source_runs AS run"
+    "  WHERE run.platform = listings.platform"
+    "    AND run.status = 'success' AND run.listings_seen > 0"
+    "    AND run.covered = 1"
+    # Compared as text, not as julianday: every stamp here is written by
+    # ``utc_now`` in one format, which sorts chronologically, and ``_LAST_SEEN``
+    # above already picks its later date that way. Wrapping the column in a
+    # function instead cost 100ms of every page on a board of 9,615 homes,
+    # because no index can be read through one.
+    f"    AND run.started_at > {_LAST_SEEN})"
+)
+
 # How long a copy has gone unseen, in days, against that clock. Nothing is
 # known of a home whose source has never completed a search, or whose dates
 # are not dates, so it counts as seen: absence has to be evidenced before it
-# can cost anything.
+# can cost anything. A home no covering search has missed yet has no first
+# absence either, and counts as seen for the same reason.
 _UNSEEN_DAYS = (
-    f"MAX(0.0, COALESCE(julianday({_SOURCE_LAST_SEARCHED}) - julianday({_LAST_SEEN}), 0.0))"
+    f"MAX(0.0, COALESCE(julianday({_SOURCE_LAST_SEARCHED}) - julianday({_FIRST_SEARCH_MISSING}), 0.0))"
 )
 
 # The user's own work, which no rule about absence may hide. A star or a note
@@ -967,6 +992,13 @@ class Repository:
                     connection.execute(f"ALTER TABLE source_runs ADD COLUMN {name} {declaration}")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_source_runs_identity ON source_runs(source_key, id DESC)"
+            )
+            # Absence is asked per home against this source's runs (see
+            # ``_FIRST_SEARCH_MISSING``), which is nine thousand lookups for
+            # one page.
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_source_runs_coverage "
+                "ON source_runs(platform, started_at)"
             )
             # Until the scanner could skip a source the deal has no use for,
             # SpareRoom and Abacus skipped themselves from inside their search

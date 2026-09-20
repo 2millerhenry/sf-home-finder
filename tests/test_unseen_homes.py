@@ -111,6 +111,33 @@ def home(
         return int(cursor.lastrowid)
 
 
+def searching_all_along(
+    repository: Repository,
+    since: float,
+    platform: str = "Zillow",
+    *,
+    covered: bool = True,
+) -> None:
+    """A source that has searched every hour since the home was last seen.
+
+    Absence is counted from the first covering search that came back without
+    the home, not from the sighting itself, so a test that means "this home
+    went quiet while the source kept looking" has to say the source was
+    looking. ``since`` is the sighting those searches straddle: the first one
+    lands just after it, as the next real scan would.
+
+    One search, now, means something else -- a source that has just come back
+    from an outage, which has witnessed a single absence whatever the home's
+    last_seen says. The board waits rather than acting on it, and the tests
+    for that say so by recording the one search.
+    """
+    hours = max(0.0, since - 0.02)
+    while hours > 0:
+        searched(repository, platform, hours_ago=hours, covered=covered)
+        hours -= 1.0
+    searched(repository, platform, hours_ago=0, covered=covered)
+
+
 def searched(
     repository: Repository,
     platform: str = "Zillow",
@@ -187,7 +214,7 @@ def test_a_home_unseen_for_36_hours_ranks_below_every_home_still_showing_up(
     """
     home(repository, "quiet", seen=DEMOTE_HOURS + 1, score=95)
     home(repository, "showing", seen=1, score=70)
-    searched(repository)
+    searching_all_along(repository, DEMOTE_HOURS + 1)
 
     assert shortlist(repository) == ["showing", "quiet"]
 
@@ -217,10 +244,47 @@ def test_a_home_unseen_for_three_days_leaves_the_shortlist_for_near_matches(
     """
     home(repository, "gone_quiet", seen=SHORTLIST_HOURS + 1, score=92)
     home(repository, "showing", seen=1, score=70)
-    searched(repository)
+    searching_all_along(repository, SHORTLIST_HOURS + 1)
 
     assert shortlist(repository) == ["showing"]
     assert near_matches(repository) == ["gone_quiet"]
+
+
+def test_a_source_back_from_an_outage_does_not_empty_the_shortlist_on_its_first_search(
+    repository: Repository,
+) -> None:
+    """Monday morning, after a laptop was shut all weekend.
+
+    The clock already stopped while the source was dark. What it did next was
+    hand the whole gap over at once: the first search back found the home
+    missing and the board read that as four days gone, straight past "ranks
+    below" and out to near matches, on one observation of a home nobody had
+    looked for since Friday. Days nobody checked are not days it was missing.
+    """
+    home(repository, "quiet_through_the_outage", seen=SHORTLIST_HOURS + 96, score=92)
+    # The last search before the site went dark, and the first one back.
+    searched(repository, hours_ago=SHORTLIST_HOURS + 97)
+    searched(repository, hours_ago=0)
+
+    assert shortlist(repository) == ["quiet_through_the_outage"]
+    assert near_matches(repository) == []
+
+
+def test_a_home_still_missing_three_days_after_the_outage_does_leave_the_shortlist(
+    repository: Repository,
+) -> None:
+    """Delayed by the outage, not switched off by it.
+
+    The source has been back and searching for just over three days and has
+    not returned the home once. That is the evidence the rule asks for, and it
+    is now there, however long the site was down before it.
+    """
+    home(repository, "gone_before_the_outage", seen=SHORTLIST_HOURS + 96, score=92)
+    searched(repository, hours_ago=SHORTLIST_HOURS + 97)
+    searching_all_along(repository, SHORTLIST_HOURS + 1)
+
+    assert shortlist(repository) == []
+    assert near_matches(repository) == ["gone_before_the_outage"]
 
 
 def test_a_home_just_inside_three_days_is_still_on_the_shortlist(
@@ -268,7 +332,7 @@ def test_the_rerank_an_unpriced_home_triggers_keeps_a_quiet_home_down(
     home(repository, "quiet", seen=DEMOTE_HOURS + 1, score=95)
     home(repository, "showing", seen=1, score=70)
     home(repository, "unpriced", seen=1, score=65, price=None)
-    searched(repository)
+    searching_all_along(repository, DEMOTE_HOURS + 1)
 
     ordered, _ = ranking_order(_rows(repository, "active"), {}, RentTable({}, {}), lambda listing: None)
 
@@ -552,7 +616,7 @@ def test_a_home_nobody_is_listing_any_more_ranks_below_one_that_only_just_missed
          eligibility_reasons=["The monthly price exceeds this path's maximum"],
          over_budget=(50, 3000))
     home(repository, "gone_quiet", seen=SHORTLIST_HOURS + 8, score=92)
-    searched(repository)
+    searching_all_along(repository, SHORTLIST_HOURS + 8)
 
     assert [row["source_id"] for row in _rows(repository, "near_matches", sort="closeness")] == [
         "still_listed_just_over",
@@ -580,7 +644,7 @@ def test_the_page_says_a_home_went_quiet_rather_than_counting_points_it_did_not_
     your cut-off", which is both false and unanswerable.
     """
     home(repository, "gone_quiet", seen=SHORTLIST_HOURS + 24, score=92)
-    searched(repository)
+    searching_all_along(repository, SHORTLIST_HOURS + 24)
 
     row = _rows(repository, "near_matches")[0]
 
@@ -593,7 +657,7 @@ def test_a_home_the_sources_still_return_is_not_marked_as_having_gone_quiet(
 ) -> None:
     """Every row carries the field, so a false one would mislabel the page."""
     home(repository, "showing", seen=1, score=92)
-    searched(repository)
+    searching_all_along(repository, 1)
 
     row = _rows(repository, "active")[0]
 
@@ -618,7 +682,7 @@ def test_the_cut_off_slider_counts_a_home_that_went_quiet_as_off_the_shortlist(
     """
     home(repository, "gone_quiet", seen=SHORTLIST_HOURS + 24, score=92)
     home(repository, "showing", seen=1, score=92)
-    searched(repository)
+    searching_all_along(repository, SHORTLIST_HOURS + 24)
 
     counts = repository.shortlist_counts([CUT_OFF], kinds=("whole_unit",))
 
@@ -649,7 +713,7 @@ def test_a_thin_shortlist_names_absence_rather_than_blaming_the_deal(
     """
     home(repository, "gone_quiet", seen=SHORTLIST_HOURS + 24, score=92)
     home(repository, "showing", seen=1, score=92)
-    searched(repository)
+    searching_all_along(repository, SHORTLIST_HOURS + 24)
 
     reasons = repository.exclusion_summary(CUT_OFF, "whole_unit", ("one_bedroom",))
 
@@ -700,7 +764,7 @@ def test_near_matches_tells_the_reader_the_source_stopped_listing_the_home(
     def board(repository: Repository) -> None:
         home(repository, "gone_quiet", seen=SHORTLIST_HOURS + 24, score=92,
              housing_kind="room", unit_type=None)
-        searched(repository)
+        searching_all_along(repository, SHORTLIST_HOURS + 24)
 
     page = dashboard(tmp_path, board)
 
@@ -765,7 +829,7 @@ def test_the_shortlist_stops_offering_a_home_its_source_has_dropped(
         home(repository, "gone_quiet", seen=SHORTLIST_HOURS + 24, score=92,
              housing_kind="room", unit_type=None)
         home(repository, "showing", seen=1, score=70, housing_kind="room", unit_type=None)
-        searched(repository)
+        searching_all_along(repository, SHORTLIST_HOURS + 24)
 
     shortlist_page = dashboard(tmp_path, board, view="active", sort="score")
 
