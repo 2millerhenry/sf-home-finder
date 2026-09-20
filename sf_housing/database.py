@@ -3342,15 +3342,29 @@ class Repository:
         housing_kind: str = "room",
         unit_types: tuple[str, ...] = (),
         outside_tabs: tuple[bool, Sequence[str]] | None = None,
+        view: str = "active",
     ) -> tuple[list[str], list[str]]:
         """The neighbourhoods and sites a view's filters offer, remembered until
-        the listings next change (see ``_remembered``)."""
-        key = ("filter_options", int(minimum_score), housing_kind, tuple(unit_types), _tabs_key(outside_tabs))
+        the listings next change (see ``_remembered``).
+
+        ``view`` because a filter offers what the list in front of the reader
+        holds. Every tab used to share one list built from the whole board, so
+        Near matches offered the shortlist's areas and the Archive's, and a
+        reader picking one was told there was nothing there. The answer to
+        "which neighbourhoods can I filter by" is different on every tab, and
+        this is the tab it is asked on.
+        """
+        key = (
+            "filter_options", int(minimum_score), housing_kind,
+            tuple(unit_types), _tabs_key(outside_tabs), view,
+        )
         with self.connection() as connection:
             return self._remembered(
                 connection,
                 key,
-                lambda: self._filter_options(connection, int(minimum_score), housing_kind, unit_types, outside_tabs),
+                lambda: self._filter_options(
+                    connection, int(minimum_score), housing_kind, unit_types, outside_tabs, view
+                ),
             )
 
     def _filter_options(
@@ -3360,26 +3374,24 @@ class Repository:
         housing_kind: str,
         unit_types: Sequence[str],
         outside_tabs: tuple[bool, Sequence[str]] | None,
+        view: str,
     ) -> tuple[list[str], list[str]]:
-        base = ["score >= ?"]
-        base_parameters: list[Any] = [minimum_score]
-        if minimum_score > 0:
-            # The shortlist's choices come from homes the shortlist can show.
-            base.append("status IN ('active', 'saved')")
-        # Shaped only where the score and status narrow anything: every row
-        # scores at least 0, and shaping every home is cheaper whole.
+        # The rows this tab actually holds, asked for exactly as the page asks
+        # for them (see ``has_homes``, which shares the pattern). A choice the
+        # reader is offered is a choice that returns something.
+        base, base_parameters = self._view_clauses(view, minimum_score)
         tab, tab_parameters = self._tab_clauses(
             housing_kind,
             "",
             unit_types,
             outside_tabs,
-            within=(base, base_parameters) if minimum_score > 0 else ((), ()),
+            within=(base, base_parameters),
         )
         if housing_kind and housing_kind not in {"room", "whole_unit", "other"}:
             tab, tab_parameters = ["housing_kind = ?"], [housing_kind]
         clauses = [*base, *tab]
         parameters: list[Any] = [*base_parameters, *tab_parameters]
-        where = " AND ".join(clauses)
+        where = " AND ".join(clauses) or "1"
         # Sources write whatever they have in the location field, and for some
         # of them that is the city. Scoring has always treated those as an
         # absent neighborhood; the filter did not, so "San Francisco" and

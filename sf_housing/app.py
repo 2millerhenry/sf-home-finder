@@ -1095,12 +1095,17 @@ def create_app(
             )
         cross_tab = view in CROSS_TAB_VIEWS
         outside_tabs = _outside_tabs(enabled_housing_modes)
-        option_minimum = preferences.minimum_score if view == "active" else 0
+        # The deal's own cut-off on every tab, not only the shortlist. It used
+        # to be dropped to zero elsewhere so the choices covered the whole
+        # board; the view now decides which rows are in front of the reader,
+        # and Near matches is drawn around that cut-off -- handed a zero it
+        # would answer for a band nobody is looking at.
         neighborhoods, stored_platforms = repository.filter_options(
-            option_minimum,
+            preferences.minimum_score,
             "" if cross_tab else housing_kind,
             () if cross_tab else mode_unit_types,
             outside_tabs,
+            view,
         )
         # The tab for everything else appears only when it holds something
         # here, or is the tab being read.

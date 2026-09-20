@@ -136,7 +136,11 @@ HELD_BACK = [
 QUESTIONS = (
     methodcaller("exclusion_summary", *ONE_BEDROOM_TAB),
     methodcaller("filter_options", *ONE_BEDROOM_TAB, DEAL_TABS),
-    methodcaller("filter_options", 0, "", (), DEAL_TABS),
+    # The Archive's choices, which is what this has always meant to ask. It
+    # used to say so by passing a cut-off of zero, back when that was also
+    # what dropped the status filter; the tab is now named, so the question
+    # survives the choices being drawn from the view.
+    methodcaller("filter_options", 0, "", (), DEAL_TABS, "all"),
     methodcaller("has_homes", 60, "saved", ""),
     methodcaller("has_homes", 60, "dismissed", ""),
     methodcaller("has_homes", 60, "active", "other", DEAL_TABS),
@@ -536,9 +540,14 @@ PAIRS = {
         methodcaller("exclusion_summary", 60, "whole_unit", (), limit=1),
         methodcaller("exclusion_summary", 60, "whole_unit", ()),
     ),
-    "choices_at_two_cut_offs": (
-        methodcaller("filter_options", 60, "whole_unit", ("one_bedroom",), DEAL_TABS),
-        methodcaller("filter_options", 0, "whole_unit", ("one_bedroom",), DEAL_TABS),
+    # The tab a filter is asked on, which is part of what it answers: the
+    # shortlist's areas and Near matches' are different lists, and serving one
+    # for the other is the crossing this pair exists to catch. It replaced a
+    # pair of cut-offs, which stopped telling the two apart once the choices
+    # started coming from the view rather than from a score alone.
+    "choices_on_two_views": (
+        methodcaller("filter_options", 60, "whole_unit", ("one_bedroom",), DEAL_TABS, "active"),
+        methodcaller("filter_options", 60, "whole_unit", ("one_bedroom",), DEAL_TABS, "near_matches"),
     ),
     "choices_on_two_tabs": (
         methodcaller("filter_options", 60, "room", (), DEAL_TABS),

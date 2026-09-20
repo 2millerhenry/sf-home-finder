@@ -660,12 +660,15 @@ def test_no_remembered_answer_still_counts_a_home_the_sweep_deleted(repository: 
     remembered until the listings change -- and a deletion is a change, or
     the Archive would offer a site whose only home had gone."""
     aged_out(repository, "m1", platform="Movoto", unseen=200)
-    assert repository.filter_options(0, "")[1] == ["Movoto"]
+    # Named, as ``has_homes`` beside it always has been: an aged-out home is
+    # in the Archive and nowhere else, and a filter asked about the shortlist
+    # is right to say it has no sites at all.
+    assert repository.filter_options(0, "", view="all")[1] == ["Movoto"]
     assert repository.has_homes(0, "all", "")
 
     assert prune(repository) == 1
 
-    assert repository.filter_options(0, "")[1] == []
+    assert repository.filter_options(0, "", view="all")[1] == []
     assert not repository.has_homes(0, "all", "")
 
 
