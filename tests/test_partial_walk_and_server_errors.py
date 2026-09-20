@@ -258,6 +258,12 @@ class ZillowOverFakes(ZillowSource):
     def search_for_trigger(self, client, preferences, trigger):
         return super().search_for_trigger(self.fake, preferences, trigger)
 
+    def enrich(self, client, listing):
+        # The recheck reads a home's own page now, so the fakes have to answer
+        # that too -- otherwise "the real Zillow reader over fakes" quietly
+        # reaches the internet from the pass these tests are not about.
+        return super().enrich(self.fake, listing)
+
 
 def zillow_run(repository: Repository) -> dict:
     return next(run for run in repository.latest_source_runs() if run["platform"] == "Zillow")

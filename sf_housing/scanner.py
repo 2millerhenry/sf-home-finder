@@ -2803,7 +2803,18 @@ class Scanner:
                 # stronger one than re-reading a single page. Stamping
                 # it here is what keeps the recheck pass aimed only at
                 # the homes nobody has heard about.
-                confirmed = {"last_verified_at": scan_started_at}
+                #
+                # Unless the card is not the source's current answer.
+                # Zillow goes on returning homes its own pages call off
+                # the market, so taking its card as a confirmation wrote
+                # "checked today" onto homes nobody had looked at, and
+                # put them behind the seven-hour bar that keeps the
+                # recheck off homes already seen to -- the queue that
+                # would have caught them. A page this scan really read
+                # still counts, for any source. See card_proves_listed.
+                confirmed: dict[str, str] = {}
+                if card_proves_listed(source) or item["enriched"]:
+                    confirmed["last_verified_at"] = scan_started_at
                 # A detail page this scan actually read is the stronger
                 # confirmation, and the only one that answers whether a rent
                 # nobody believes belongs to a listing still up. Written here

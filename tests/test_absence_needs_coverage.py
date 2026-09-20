@@ -347,10 +347,13 @@ class Stub:
     manual_reason = None
     detail_budget = 0
 
-    def __init__(self, platform: str, *, covers: bool, listings=(), search=None) -> None:
+    def __init__(
+        self, platform: str, *, covers: bool, listings=(), search=None, card_proves=True
+    ) -> None:
         self.platform = platform
         self.search_url = f"https://example.test/{platform}"
         self.search_covers_inventory = covers
+        self.search_card_proves_listed = card_proves
         self._listings = list(listings)
         self._search = search
 
@@ -421,3 +424,47 @@ def test_a_search_that_filled_its_result_ceiling_did_not_cover_its_source(
     )
 
     assert covered_runs(board) == {"Covers": 0}
+
+
+# --------------------------------------------------------------------------
+# what a card is worth: for one source, nothing
+# --------------------------------------------------------------------------
+
+
+def confirmed_at(repository: Repository, platform: str) -> str | None:
+    with repository.connection() as connection:
+        row = connection.execute(
+            "SELECT json_extract(metadata_json, '$.last_verified_at') AS checked "
+            "FROM listings WHERE platform = ?",
+            (platform,),
+        ).fetchone()
+    return None if row is None else row["checked"]
+
+
+def test_a_search_returning_a_home_confirms_it_for_a_source_whose_card_can_be_believed(
+    board: Repository, preferences: Preferences
+) -> None:
+    """The rule as it stands for every source but one, and the reason the
+    recheck can aim only at homes nobody has heard about."""
+    scan(board, [Stub("Believable", covers=True, listings=[room("Believable", "1")])], preferences)
+
+    assert confirmed_at(board, "Believable") is not None
+
+
+def test_a_card_that_cannot_prove_a_home_is_listed_does_not_confirm_it(
+    board: Repository, preferences: Preferences
+) -> None:
+    """Zillow's cards said FOR_RENT for homes its own pages called off the
+    market, so counting one as a confirmation wrote "checked today" onto a
+    home nobody had looked at -- and put it behind the seven-hour bar that
+    keeps the recheck off homes already seen to, which was the one pass that
+    would have caught it. On the owner's board every one of 2,103 Zillow
+    homes carried that stamp and not one had ever had its page read.
+    """
+    scan(
+        board,
+        [Stub("Unbelievable", covers=False, card_proves=False, listings=[room("Unbelievable", "1")])],
+        preferences,
+    )
+
+    assert confirmed_at(board, "Unbelievable") is None
