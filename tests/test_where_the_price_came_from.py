@@ -79,21 +79,26 @@ def _hours_ago(hours: float) -> str:
 def stopped_appearing(repository: Repository, listing_id: int, hours: float) -> None:
     """Put a home's last sighting ``hours`` back, with its source still searching.
 
-    Both halves matter: the rule counts a home's absence against its own
-    source's last successful search, so without the search on record the home
-    is not absent at all, it is merely stored on a board nobody has scanned.
+    Every part matters. The rule counts a home's absence against its own
+    source's last successful search, so without a search on record the home is
+    not absent at all, it is merely stored on a board nobody has scanned. And
+    it counts from the first covering search that came back without the home,
+    so there has to be one just after the sighting as well as one now:
+    otherwise this is a source that has only now come back from an outage, and
+    a single absence is not yet evidence of anything.
     """
     with repository.connection() as connection:
         connection.execute("UPDATE listings SET last_seen = ? WHERE id = ?", (_hours_ago(hours), listing_id))
-        scan = connection.execute(
-            "INSERT INTO scan_runs (trigger, status, started_at) VALUES ('test', 'completed', ?)",
-            (_hours_ago(0),),
-        ).lastrowid
-        connection.execute(
-            """INSERT INTO source_runs (scan_run_id, platform, status, started_at, listings_seen, covered)
-               VALUES (?, 'Craigslist', 'success', ?, 40, 1)""",
-            (scan, _hours_ago(0)),
-        )
+        for moment in (max(0.0, hours - 0.02), 0.0):
+            scan = connection.execute(
+                "INSERT INTO scan_runs (trigger, status, started_at) VALUES ('test', 'completed', ?)",
+                (_hours_ago(moment),),
+            ).lastrowid
+            connection.execute(
+                """INSERT INTO source_runs (scan_run_id, platform, status, started_at, listings_seen, covered)
+                   VALUES (?, 'Craigslist', 'success', ?, 40, 1)""",
+                (scan, _hours_ago(moment)),
+            )
         connection.commit()
 
 
