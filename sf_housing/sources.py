@@ -3372,6 +3372,24 @@ class ZillowSource:
     # a card coming back proves nothing and the page is read instead. See
     # ``card_proves_listed`` and ``enrich`` below.
     search_card_proves_listed = False
+    # Five pages a scan, where every other source may read 250.
+    #
+    # Zillow answers about thirty detail pages from one address before its bot
+    # protection starts returning a captcha to everything -- measured: after
+    # thirty-five reads in a few minutes, the *search page itself* began
+    # answering 403. Losing the search costs every home this source finds, to
+    # learn about the handful being read, so the reading is kept far below
+    # whatever that threshold really is.
+    #
+    # Few, and the right ones. A home whose page has never been read sorts to
+    # the front of the queue (``Repository.shortlisted_absent_from_search``),
+    # and a home that arrived in this scan is exactly that -- the recheck runs
+    # after the scan has stored what it found -- so new homes are checked as
+    # they land, before they are ever shown as a shortlist a reader can act
+    # on. About three of those arrive per scan; the rest of the five works
+    # through the homes already there.
+    recheck_budget = 5
+    recheck_floor = 5
     mode = "automatic"
     search_url = "https://www.zillow.com/san-francisco-ca/rentals/"
     manual_reason = None

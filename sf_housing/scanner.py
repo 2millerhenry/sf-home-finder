@@ -1150,9 +1150,14 @@ class Scanner:
             )
             if self._clock() + self.timeout_seconds > limit:
                 break
-            if self._confirm_from_page(
-                client, source, preferences, listing_id, candidate, limit=limit
-            ):
+            try:
+                confirmed = self._confirm_from_page(
+                    client, source, preferences, listing_id, candidate, limit=limit
+                )
+            except SourceError as refusal:
+                LOGGER.info("%s stopped reading pages after a refusal: %s", source.platform, refusal)
+                break
+            if confirmed:
                 checked += 1
                 if self.detail_delay_seconds:
                     time.sleep(self.detail_delay_seconds)
@@ -1182,6 +1187,13 @@ class Scanner:
         """
         try:
             refreshed = self._enrich_within_ceiling(source, client, candidate, limit=limit)
+        except SourceError:
+            # A refusal is the site saying stop, and the page after it would
+            # be refused too. Worse, on Zillow it is the same bot protection
+            # that then starts refusing the search -- which costs every home
+            # the source finds, to learn nothing about the few being read.
+            # So it reaches the caller, which ends this source's pass.
+            raise
         except Exception as exc:
             # Unreachable is not gone. Leave the home exactly as it was, and
             # leave its confirmation dates alone so it is tried again rather
@@ -1349,9 +1361,14 @@ class Scanner:
                 and not implausible_rent(replace(candidate, price=median))
             ):
                 continue
-            if self._confirm_from_page(
-                client, source, preferences, listing_id, candidate, limit=limit
-            ):
+            try:
+                confirmed = self._confirm_from_page(
+                    client, source, preferences, listing_id, candidate, limit=limit
+                )
+            except SourceError as refusal:
+                LOGGER.info("%s stopped reading pages after a refusal: %s", source.platform, refusal)
+                break
+            if confirmed:
                 checked += 1
                 if self.detail_delay_seconds:
                     time.sleep(self.detail_delay_seconds)
