@@ -186,18 +186,42 @@ def test_only_the_sources_that_read_a_whole_inventory_claim_to_cover_one() -> No
 
     assert claimed == {
         "Abacus (small buildings)",
-        "Apartment List",
         "ApartmentGuide",
         "AppFolio",
         "AvalonBay",
         "Listings Project",
         "Movoto",
         "SF Housing Portal",
-        "SpareRoom",
         "UDR",
         "Uloop",
-        "Zumper",
     }
+
+
+# A source whose search reads one page returns the same number of homes every
+# run, because that number is the page. These three did, on the owner's own
+# board, while every source that really walks its inventory moved with the
+# city: Craigslist between 143 and 822, Movoto between 250 and 1,971.
+READS_ONE_PAGE = [
+    ("Zumper", "ZumperSource", "49 or 50 homes on each of 71 runs"),
+    ("Apartment List", "ApartmentListSource", "19 or 20 buildings on each of 66 runs"),
+    ("SpareRoom", "SpareRoomSource", "11 rooms on each of 12 runs"),
+]
+
+
+@pytest.mark.parametrize("platform,class_name,measured", READS_ONE_PAGE)
+def test_a_source_that_reads_one_page_does_not_claim_the_inventory(
+    platform: str, class_name: str, measured: str
+) -> None:
+    """A constant count is a page size, and absence behind it means nothing.
+
+    Each of these claimed to read its whole San Francisco inventory, so a home
+    it stopped returning was treated as a home taken down: ranked below after
+    36 hours, moved to near matches after three days. It was really a home that
+    had been pushed onto page two.
+    """
+    source = getattr(sources_module, class_name)
+    assert source.platform == platform
+    assert covers_inventory(source) is False, measured
 
 
 @pytest.mark.parametrize(

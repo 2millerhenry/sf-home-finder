@@ -1268,9 +1268,11 @@ class ApartmentListSource:
     runs_in_own_lane = True
 
     platform = "Apartment List"
-    # One request, and the buildings are in the page's own structured data
-    # with no filter applied to the request. What is not in it is not let.
-    search_covers_inventory = True
+    # No claim. The structured data carries no filter, but it carries one
+    # page: 66 successful runs on a real board returned 19 or 20 buildings and
+    # never another number. San Francisco has more than twenty. What is not in
+    # the page is not absent, only unread.
+    search_covers_inventory = False
     mode = "automatic"
     search_url = "https://www.apartmentlist.com/ca/san-francisco"
     manual_reason = None
@@ -1464,10 +1466,13 @@ class ZumperSource:
     runs_in_own_lane = True
 
     platform = "Zumper"
-    # The city-scoped schema.org feed, read whole in one request. The deal is
-    # applied to what comes back, never to what is asked for, so the feed is
-    # the same feed whatever the deal says.
-    search_covers_inventory = True
+    # No claim. The feed is city-scoped and unfiltered, which is why this
+    # once said otherwise -- but one request is one page of it. Across 71
+    # successful runs on a real board it returned 49 or 50 homes and never
+    # another number, which is a page size, not a city. Until the walk is
+    # written, a Zumper home missing from a run is a home this source did not
+    # ask about.
+    search_covers_inventory = False
     mode = "automatic"
     search_url = "https://www.zumper.com/apartments-for-rent/san-francisco-ca"
     manual_reason = None
@@ -5835,9 +5840,11 @@ class SpareRoomSource:
     # behind them. See traffic_group() for what "itself" means here.
     runs_in_own_lane = True
     platform = "SpareRoom"
-    # One request for the whole SF result page; the rooms on it are the rooms
-    # advertised.
-    search_covers_inventory = True
+    # No claim. One request reads the first result page, and the URL asks for
+    # no page after it; 12 successful runs on a real board each returned
+    # exactly 11 rooms. A room that drops off that page has been pushed down
+    # it, not taken down.
+    search_covers_inventory = False
     mode = "automatic"
     search_url = "https://www.spareroom.com/rooms-for-rent/san_francisco?sort_by=last_updated"
     manual_reason = None
