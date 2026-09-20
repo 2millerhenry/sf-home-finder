@@ -233,6 +233,30 @@ CREATE TABLE IF NOT EXISTS scoring_state (
 CONFIRMATION_STALE_AFTER = timedelta(hours=24)
 
 
+# What a home's own source going quiet about it costs, in two steps. A source
+# dropping a home is absence, never proof: it can mean the flat is let, and it
+# can equally mean the home slipped past a result cap or a search that ranked
+# it differently today. So absence only ever demotes -- nothing here writes
+# ``verified_inactive``, which is reserved for a page we fetched that said the
+# home is gone, and nothing here deletes a row.
+#
+# Both numbers are named because they are the two the owner will want to tune,
+# and both are counted against the source's own clock rather than the wall
+# clock (see ``_UNSEEN_DAYS``).
+#
+# Below every home that is still showing up. The scanner runs twice a day, so
+# thirty-six hours is three chances missed: enough that a home has stopped
+# appearing rather than been unlucky once, and short enough that the top of
+# the shortlist is homes somebody can still go and see today.
+UNSEEN_DEMOTE_AFTER = timedelta(hours=36)
+# Off the shortlist altogether, into Near matches, where it is still ranked,
+# still filtered, still searchable and still one click from its listing. Six
+# missed chances rather than three, because this is the step a reader does not
+# see happen: a home that has been absent this long is far more likely let
+# than unlucky, but it is never so likely that the row should disappear.
+UNSEEN_SHORTLIST_AFTER = timedelta(days=3)
+
+
 def _confirmation_check(stamp: object) -> dict[str, str] | None:
     """The open question a home raises simply by not having been seen lately.
 
@@ -296,6 +320,13 @@ def near_miss_distance(item: dict[str, Any], minimum_score: int) -> float:
     which leaves it short on points as well -- is judged by whichever miss is
     the nearer, because that is the one somebody would forgive.
 
+    A third kind joined them: a home short of nothing the deal asked for, which
+    its own source has simply stopped returning (``UNSEEN_SHORTLIST_AFTER``).
+    Measured against the allowance that put it here -- 0.0 the day it left the
+    shortlist, 1.0 twice as long gone -- because otherwise a home that scored
+    92 yesterday would sit below every home the deal turned down, and it is the
+    likeliest of all of them to still be worth a call.
+
     Never raises and never divides by a missing ceiling: a row stored before
     any of this shipped is put last rather than taking the page down with it.
     """
@@ -307,6 +338,10 @@ def near_miss_distance(item: dict[str, Any], minimum_score: int) -> float:
     maximum = int(item.get("budget_maximum") or 0)
     if over_by > 0 and maximum > 0 and NEAR_MATCH_OVER_BUDGET > 0:
         distances.append(over_by / (maximum * NEAR_MATCH_OVER_BUDGET))
+    allowance = UNSEEN_SHORTLIST_AFTER.total_seconds() / 86400.0
+    unseen = float(item.get("unseen_days") or 0.0)
+    if unseen > allowance and allowance > 0:
+        distances.append((unseen - allowance) / allowance)
     return min(distances) if distances else float("inf")
 
 
@@ -320,6 +355,58 @@ _STALE = (
     "COALESCE(julianday('now') - julianday(COALESCE("
     "json_extract(metadata_json, '$.last_verified_at'), last_seen)), 99) > 1.0"
 )
+
+# When a copy was last actually seen: a search that returned it, or a fetch of
+# its own page that confirmed it, whichever happened later. Later rather than
+# ``COALESCE``, which prefers the page stamp and would age a home the searches
+# have gone on returning ever since it was last opened.
+_LAST_SEEN = (
+    "MAX(listings.last_seen, COALESCE("
+    "json_extract(listings.metadata_json, '$.last_verified_at'), listings.last_seen))"
+)
+
+# The clock absence is measured against: not now, but the last time this
+# home's own source finished a search and came back with homes in it.
+#
+# This is what keeps one outage from emptying the shortlist, which is the
+# worst false positive available here. A site that is blocking us, timing out
+# or simply unreachable records no successful run, so its homes' clocks stop
+# where they were and every one of them keeps its place until the site answers
+# again. The same evidence ``freshness.py`` derives a source's health and its
+# backoff from -- the ``source_runs`` the scanner writes -- read here in SQL
+# because this is a question asked of nine thousand rows at a time and keyed
+# by the platform a listing stores, not by the source object the scan held.
+#
+# ``listings_seen > 0`` because a run that read a page and parsed nothing out
+# of it is no evidence about any particular home. That is how a site quietly
+# changing its markup looks: success, no error, and zero results. Without this
+# the next such change would drain the shortlist in three days and blame the
+# homes. It costs the opposite mistake -- a source with genuinely nothing to
+# show holds its homes' clocks still -- which is the mistake this app prefers.
+_SOURCE_LAST_SEARCHED = (
+    "(SELECT MAX(run.started_at) FROM source_runs AS run"
+    "  WHERE run.platform = listings.platform"
+    "    AND run.status = 'success' AND run.listings_seen > 0)"
+)
+
+# How long a copy has gone unseen, in days, against that clock. Nothing is
+# known of a home whose source has never completed a search, or whose dates
+# are not dates, so it counts as seen: absence has to be evidenced before it
+# can cost anything.
+_UNSEEN_DAYS = (
+    f"MAX(0.0, COALESCE(julianday({_SOURCE_LAST_SEARCHED}) - julianday({_LAST_SEEN}), 0.0))"
+)
+
+# The user's own work, which no rule about absence may hide. A star or a note
+# is the one thing on this board that cannot be fetched again, and somebody
+# who starred a home wants to decide for themselves when to give up on it.
+_KEPT_BY_USER = "(status = 'saved' OR COALESCE(note, '') <> '')"
+
+
+def _as_days(after: timedelta) -> float:
+    """``after`` as the number of days ``_UNSEEN_DAYS`` is compared against."""
+    return after.total_seconds() / 86400.0
+
 
 # Where an application can be made directly (see ``Repository._dashboard_row``).
 _APPLICATION_PREFIX = "https://abacus.appfolio.com/"
@@ -2059,14 +2146,33 @@ class Repository:
 
     @staticmethod
     def _shortlist_clauses(minimum_score: int) -> tuple[list[str], list[Any]]:
-        """The active view's own predicate: the shortlist, whatever the tab."""
+        """The active view's own predicate: the shortlist, whatever the tab.
+
+        Two things beyond the score and the deal, and the difference between
+        them is the whole of this app's rule about what may hide a home.
+
+        A copy whose own page said it is gone leaves at once, whatever the
+        clock says. Scoring caps such a copy at 49 and that alone kept it off
+        the shortlist, but only from the next time something scored it; said
+        here, the proof takes effect the moment it is written and cannot be
+        undone by a cut-off the reader drags below 49.
+
+        A copy its source has merely stopped returning leaves after
+        ``UNSEEN_SHORTLIST_AFTER``, and only for Near matches -- unless the
+        user starred or noted it, which no rule about absence may override.
+        This is per copy, so a home two sites list is held by whichever of
+        them still shows it: one site going quiet about a home the other is
+        still advertising says nothing about the home.
+        """
         return (
             [
                 "score >= ?",
                 "status IN ('active', 'saved')",
                 "eligibility IN ('eligible', 'needs_verification')",
+                f"NOT ({_GONE})",
+                f"({_KEPT_BY_USER} OR {_UNSEEN_DAYS} <= ?)",
             ],
-            [minimum_score],
+            [minimum_score, _as_days(UNSEEN_SHORTLIST_AFTER)],
         )
 
     def _view_clauses(self, view: str, minimum_score: int) -> tuple[list[str], list[Any]]:
@@ -2084,10 +2190,18 @@ class Repository:
             pass
         elif view == "near_matches":
             clauses.append("status IN ('active', 'saved')")
-            # Two ways to nearly match, and no others. A home the deal accepts
-            # that fell a few points short of the cut-off; or a home ruled out
-            # by one thing only, the rent, and only just -- which is the case
-            # the score is blind to.
+            # Three ways to nearly match, and no others. A home the deal
+            # accepts that fell a few points short of the cut-off; a home
+            # ruled out by one thing only, the rent, and only just -- which is
+            # the case the score is blind to; or a home short of nothing at
+            # all, which its own source has stopped returning.
+            #
+            # That third one is why this view is where the unseen rule sends
+            # homes rather than hiding them. The home is still stored, still
+            # ranked among the others by how nearly it matches, still one
+            # click from the listing the reader can check for themselves --
+            # which is what lets the shortlist be strict about absence without
+            # the app ever having to be sure.
             clauses.append(
                 "("
                 "(eligibility IN ('eligible', 'needs_verification') AND score < ? AND score >= ?)"
@@ -2103,10 +2217,25 @@ class Repository:
                 " AND (eligibility != 'ineligible'"
                 "      OR json_array_length(COALESCE(eligibility_reasons_json, '[]')) = 1)"
                 ")"
+                " OR ("
+                # Good enough for the shortlist, and gone quiet. Deliberately
+                # not a copy proved gone: that one has left for good and has
+                # its own place in the Archive, and putting it here would bury
+                # the homes that might still be real under the ones that are
+                # not -- which is the mistake Near matches was made to undo.
+                "eligibility IN ('eligible', 'needs_verification') AND score >= ?"
+                f" AND NOT ({_GONE}) AND {_UNSEEN_DAYS} > ?"
+                ")"
                 ")"
             )
             parameters.extend(
-                [minimum_score, max(0, minimum_score - NEAR_MATCH_MARGIN), NEAR_MATCH_OVER_BUDGET]
+                [
+                    minimum_score,
+                    max(0, minimum_score - NEAR_MATCH_MARGIN),
+                    NEAR_MATCH_OVER_BUDGET,
+                    minimum_score,
+                    _as_days(UNSEEN_SHORTLIST_AFTER),
+                ]
             )
             # Nor is a home near a match when another copy of it is on the
             # shortlist already: it is on the shortlist. (A home is on one
@@ -2241,8 +2370,17 @@ class Repository:
         )
         clauses.extend(tab_clauses)
         parameters.extend(tab_parameters)
+        # Homes still showing up, then homes that have gone quiet
+        # (``UNSEEN_DEMOTE_AFTER``), and the recommendation order unchanged
+        # inside each group -- so a home that stopped appearing yesterday
+        # sinks below every home somebody can still go and see, without the
+        # ranking the rest of the app spends its time on being thrown away.
+        # Only on the recommended order: the other sorts each answer a
+        # question the reader asked in so many words, and "cheapest first"
+        # that puts a dearer home first is a broken sort, not a careful one.
+        still_showing_first = f"(COALESCE(home_unseen_days, 0) > {_as_days(UNSEEN_DEMOTE_AFTER)}) ASC"
         order_by = {
-            "score": "home_score DESC, score DESC, confidence DESC, COALESCE(published_at, first_found) DESC",
+            "score": f"{still_showing_first}, home_score DESC, score DESC, confidence DESC, COALESCE(published_at, first_found) DESC",
             # By the dearest live quote: a cheaper copy is not a cheaper home.
             "price": "rank_price IS NULL, rank_price ASC, score DESC",
             # The column reads "Posted", so newest must mean newest posted.
@@ -2280,7 +2418,8 @@ class Repository:
                        status = 'saved' AS starred, COALESCE(note, '') <> '' AS noted,
                        {_GONE} AS gone, eligibility = 'ineligible' AS outside, {_STALE} AS stale,
                        copy_rank AS picked_rank,
-                       score AS picked_score, opened_at AS picked_opened_at
+                       score AS picked_score, opened_at AS picked_opened_at,
+                       {_UNSEEN_DAYS} AS picked_unseen_days
                 FROM listings{where}
             ),
             ranked AS (
@@ -2295,7 +2434,10 @@ class Repository:
                                     picked_rank DESC, picked_id DESC
                        ) AS copy_number,
                        MIN(picked_score) OVER (PARTITION BY home) AS picked_home_score,
-                       MAX(picked_opened_at) OVER (PARTITION BY home) AS home_opened_at
+                       MAX(picked_opened_at) OVER (PARTITION BY home) AS home_opened_at,
+                       -- A home is still showing up while any of its copies
+                       -- is, so the freshest copy speaks for the home.
+                       MIN(picked_unseen_days) OVER (PARTITION BY home) AS home_unseen_days
                 FROM picked
             ),
             -- Every live copy's verdict, not only the copies this view kept:
@@ -2322,6 +2464,7 @@ class Repository:
             )"""
         select = f"""
             SELECT listings.*, ranked.home, ranked.copy_number, ranked.home_opened_at,
+                   ranked.home_unseen_days,
                    live.live_price AS home_price,
                    COALESCE(live.fresh_price, live.live_price, listings.price) AS rank_price,
                    COALESCE(live.live_score, ranked.picked_home_score) AS home_score,
@@ -2352,6 +2495,13 @@ class Repository:
                 item.pop(key, None)
             # Having read the flat on one site is having read it.
             item["opened_at"] = item.pop("home_opened_at", None) or item.get("opened_at")
+            # How long the home has gone unseen, so the page can rank it, sort
+            # it by how nearly it still matches, and say why it moved. Worked
+            # out per home by the query above rather than per row here,
+            # because it is a question about every copy of the home and about
+            # its source's history, neither of which a single row holds.
+            item["unseen_days"] = float(item.pop("home_unseen_days", 0.0) or 0.0)
+            item["unseen_too_long"] = item["unseen_days"] > _as_days(UNSEEN_SHORTLIST_AFTER)
             self._attach_copies(item, row, copies.get(str(row["home"]), []))
             items.append(item)
         if by_closeness:
@@ -2613,29 +2763,53 @@ class Repository:
         # Counted by home, and a home one of whose copies made the shortlist
         # was not held back at all.
         shortlist, shortlist_parameters = self._shortlist_clauses(int(minimum_score))
+        # The third way to be held back, beside the deal's rules and its
+        # cut-off: nothing about the home at all, only that its source has
+        # stopped returning it. Left out, the one explanation of a thin
+        # shortlist the reader gets could name every cause but the one that
+        # had just moved seventeen homes off a shortlist of a hundred and
+        # thirty-three.
+        unseen = f"(eligibility IN ('eligible', 'needs_verification') AND score >= ? AND {_UNSEEN_DAYS} > ?)"
         clauses = [
             "status IN ('active', 'saved')",
             *tab,
-            "(eligibility = 'ineligible' OR score < ?)",
+            f"(eligibility = 'ineligible' OR score < ? OR {unseen})",
             f"{GROUP_SQL} NOT IN (SELECT {GROUP_SQL} FROM listings WHERE {' AND '.join(shortlist)})",
         ]
-        parameters: list[Any] = [*tab_parameters, int(minimum_score), *shortlist_parameters]
+        parameters: list[Any] = [
+            *tab_parameters,
+            int(minimum_score),
+            int(minimum_score),
+            _as_days(UNSEEN_SHORTLIST_AFTER),
+            *shortlist_parameters,
+        ]
         # A home's copies tied on verdict and score are read oldest row first:
         # the order they always came in (the table's own, which the sort kept),
         # written down now that an index decides how the rows are found.
         sql = (
-            f"SELECT {GROUP_SQL} AS home, score, eligibility, score_details_json FROM listings "
+            f"SELECT {GROUP_SQL} AS home, score, eligibility, score_details_json, "
+            f"{_UNSEEN_DAYS} AS unseen_days FROM listings "
             f"WHERE {' AND '.join(clauses)} ORDER BY home, eligibility = 'ineligible', score DESC, id"
         )
         rows = connection.execute(sql, parameters).fetchall()
 
         counts: dict[str, int] = {}
         counted: set[str] = set()
+        days = _as_days(UNSEEN_SHORTLIST_AFTER)
         for row in rows:
             if row["home"] in counted:
                 continue
             counted.add(row["home"])
-            if row["eligibility"] == "ineligible":
+            if (
+                row["eligibility"] != "ineligible"
+                and int(row["score"] or 0) >= int(minimum_score)
+                and float(row["unseen_days"] or 0.0) > days
+            ):
+                # Named as the absence it is. "Below your cut-off" would be
+                # false of a home that cleared it, and "outside your deal"
+                # falser still: the deal never turned this one down.
+                label = f"not listed by their own source for {days:g} days or more"
+            elif row["eligibility"] == "ineligible":
                 try:
                     details = json.loads(row["score_details_json"] or "{}")
                 except ValueError:
@@ -2677,12 +2851,22 @@ class Repository:
         home is on exactly one tab, and the slider counts them all. (Before
         that tab existed, 32 homes of no stated size sat inside the 316 the
         slider claimed while the tabs held 284.) Counted as homes, not rows.
+
+        And the two the shortlist itself applies beyond the score: a copy
+        proved gone, and one its source has stopped returning
+        (``UNSEEN_SHORTLIST_AFTER``), neither of which the page shows at any
+        cut-off. Written out here rather than borrowed from
+        ``_shortlist_clauses`` because this counts every cut-off at once and
+        so cannot take that predicate's ``score >= ?``; ``tests/`` holds the
+        two to agreement.
         """
         clauses = [
             "status IN ('active', 'saved')",
             "eligibility IN ('eligible', 'needs_verification')",
+            f"NOT ({_GONE})",
+            f"({_KEPT_BY_USER} OR {_UNSEEN_DAYS} <= ?)",
         ]
-        parameters: list[Any] = []
+        parameters: list[Any] = [_as_days(UNSEEN_SHORTLIST_AFTER)]
         wanted = [str(kind) for kind in kinds if str(kind)]
         if wanted:
             clauses.append(f"housing_kind IN ({','.join('?' for _ in wanted)})")

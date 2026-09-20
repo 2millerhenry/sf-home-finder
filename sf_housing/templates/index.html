@@ -26,7 +26,7 @@
       <p class="subtle">Every listing still on file, including low scores, homes you passed, and homes aged out after three weeks on the board. Changing your deal does not rescore an aged-out home until you restore it, and one that has been here four months, with no site listing it all that time, is removed unless you starred, noted or passed it.</p>
     {% elif view == 'near_matches' %}
       <h1>Near matches</h1>
-      <p class="subtle">Homes that missed by one thing: a few points short of your cut-off, or a little over your budget. Each row says which. Everything else is in the full archive.</p>
+      <p class="subtle">Homes that missed by one thing: a few points short of your cut-off, a little over your budget, or nothing at all except that their source has stopped listing them. Each row says which. Nothing here is deleted, and everything else is in the full archive.</p>
     {% elif housing_mode == 'other' %}
       <h1>Other homes worth a look</h1>
       <p class="subtle">Homes that match your deal but fit none of your tabs, almost always because the listing never says how many bedrooms it has. Check the size before you contact anyone.</p>
@@ -301,7 +301,10 @@
           </td>
           <td class="cell-check">
             {%- if view == 'near_matches' -%}
-            <p class="near-why">{% if listing.over_budget_by %}${{ "{:,}".format(listing.over_budget_by) }}/mo over your budget{% else %}{{ minimum_score - listing.score }} point{{ '' if minimum_score - listing.score == 1 else 's' }} below your cut-off{% endif %}</p>
+            {#- A home here for absence rather than for a miss is short of
+                nothing: printing "0 points below your cut-off" at it would be
+                both false and baffling, so it says what actually moved it. -#}
+            <p class="near-why">{% if listing.unseen_too_long %}Not listed by {{ listing.platform }} for {{ listing.unseen_days|round|int }} days{% elif listing.over_budget_by %}${{ "{:,}".format(listing.over_budget_by) }}/mo over your budget{% else %}{{ minimum_score - listing.score }} point{{ '' if minimum_score - listing.score == 1 else 's' }} below your cut-off{% endif %}</p>
             {%- endif -%}
             {%- set open_items = listing.blockers or listing.checks -%}
             {%- if open_items -%}
@@ -388,7 +391,7 @@
     {% elif view == 'near_matches' %}
       <p>No collected homes are just outside this deal. Check again later or review the deal without changing it automatically.</p>
     {% else %}
-      <p>{% if scan_running %}Sources are still checking. Results appear as they are saved.{% elif source_attention_count %}{{ source_attention_count }} source{% if source_attention_count != 1 %}s need{% else %} needs{% endif %} attention. Open System status for the exact recovery step.{% elif scans and scans[0].sources_failed %}The last check had a source problem. Open System status for the exact source and recovery action.{% elif scans %}The last check worked; {{ excluded_total if excluded_total else 'no collected home' }} {% if excluded_total %}homes were collected and every one was held back by your deal{% else %}met this path and threshold{% endif %}.{% else %}Run the first source check. If inventory is genuinely empty, the source status below will explain what happened.{% endif %}</p>
+      <p>{% if scan_running %}Sources are still checking. Results appear as they are saved.{% elif source_attention_count %}{{ source_attention_count }} source{% if source_attention_count != 1 %}s need{% else %} needs{% endif %} attention. Open System status for the exact recovery step.{% elif scans and scans[0].sources_failed %}The last check had a source problem. Open System status for the exact source and recovery action.{% elif scans %}The last check worked; {{ excluded_total if excluded_total else 'no collected home' }} {% if excluded_total %}homes were collected and every one was held back{% else %}met this path and threshold{% endif %}.{% else %}Run the first source check. If inventory is genuinely empty, the source status below will explain what happened.{% endif %}</p>
     {% endif %}
     {# The search almost always worked; the deal is narrow. Say which limit cost
        what, so the next move is obvious instead of a guess. #}
@@ -412,7 +415,7 @@
   {# The list is not empty, but it is far shorter than what was collected.
      Saying which limit costs what turns "why so few?" into a decision. #}
   <details class="why-short">
-    <summary>{{ excluded_total }} more home{{ 's' if excluded_total != 1 }} were collected and held back by your deal</summary>
+    <summary>{{ excluded_total }} more home{{ 's' if excluded_total != 1 }} were collected and held back</summary>
     <ul>
       {% for item in exclusion_summary %}
       <li><b>{{ item.count }}</b> {{ item.reason }}</li>

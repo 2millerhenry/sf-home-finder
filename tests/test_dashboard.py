@@ -927,7 +927,11 @@ def test_a_short_shortlist_says_what_the_deal_held_back(tmp_path: Path) -> None:
         page = client.get("/?housing=room").text
 
     assert "listing-row" in page, "this shortlist is not empty"
-    assert "held back by your deal" in page, "and still explains what is missing"
+    assert "were collected and held back" in page, "and still explains what is missing"
+    # The count and the reason, not only the sentence around them: the note is
+    # there to say which limit cost what.
+    assert "9 more homes were collected and held back" in page
+    assert "below your" in page and "match cut-off" in page
     assert 'href="/preferences"' in page
 
 
@@ -942,7 +946,7 @@ def test_a_shortlist_holding_everything_collected_says_nothing(tmp_path: Path) -
     with TestClient(application) as client:
         page = client.get("/").text
 
-    assert "held back by your deal" not in page
+    assert "were collected and held back" not in page
 
 
 # --------------------------------------------------------------------------
