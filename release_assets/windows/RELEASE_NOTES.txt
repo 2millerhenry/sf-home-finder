@@ -1,3 +1,22 @@
+SF Home Finder 0.5.12 for Windows x64
+
+Homes Zillow has taken down leave the shortlist. Its search goes on
+returning them as though they were still to let -- 502 Precita Ave and 161
+Albion St were both arriving that way on the days their own pages read "Off
+market" -- so the app now reads the home's own page and believes it only when
+it says the same thing twice: nothing on it Zillow marks for rent, and a
+marker you would see yourself. Of the twenty best-scoring Zillow homes on one
+real shortlist, thirteen were off the market, including one showing at
+$2,594 and scored "Excellent". A page that will not load says neither thing
+and costs a home nothing, because a home that might still be there stays.
+
+The Neighborhood filter offers the neighbourhoods that tab actually holds.
+Every tab shared one list built from the whole board, so Near matches offered
+the shortlist's areas and the Archive's, and choosing one returned an empty
+page. On one board the list ran to hundreds of entries on a tab showing nine
+areas; now it shows the nine.
+
+
 SF Home Finder 0.5.11 for Windows x64
 
 The Neighborhood filter offers neighbourhoods. It was built from whatever
