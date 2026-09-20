@@ -41,6 +41,7 @@ from .sources import (
     ScanTimeUpError,
     SourceError,
     application_deadline_passed,
+    card_proves_listed,
     covers_inventory,
     facebook_coordinate_neighborhood,
     sf_area_from_address,
@@ -1123,7 +1124,10 @@ class Scanner:
         try:
             candidates = self.repository.shortlisted_absent_from_search(
                 source.platform,
-                seen_source_ids,
+                # A source whose cards do not prove a home is still listed has
+                # nothing to exclude: every one of its homes is a candidate,
+                # returned by this search or not. See card_proves_listed.
+                seen_source_ids if card_proves_listed(source) else set(),
                 preferences.minimum_score,
                 limit=ceiling,
                 recheck_after=RECHECK_AFTER,

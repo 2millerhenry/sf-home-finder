@@ -349,6 +349,25 @@ class ListingSource(Protocol):
     def enrich(self, client: httpx.Client, listing: ListingCandidate) -> ListingCandidate: ...
 
 
+def card_proves_listed(source: object) -> bool:
+    """Is a home coming back in this source's search evidence it is still let?
+
+    True for all but one, and the default is True because for a normal source
+    a card is its own current answer about a home -- re-reading the page it
+    has just handed us would spend the recheck allowance confirming what we
+    were told a second ago.
+
+    Zillow is the exception, and not a small one. Its search kept returning
+    502 Precita Ave and 161 Albion St as ``FOR_RENT`` cards on the days their
+    own pages read "Off market", and three of eight of its active homes
+    sampled from a real board were off the market -- roughly 790 of that
+    board's 2,103. Absence can never catch those, because the search does not
+    stop returning them, so its homes are re-read whether the last search
+    brought them back or not.
+    """
+    return bool(getattr(source, "search_card_proves_listed", True))
+
+
 def covers_inventory(source: object) -> bool:
     """Did this source's search look everywhere it keeps its San Francisco homes?
 
@@ -3309,6 +3328,17 @@ class MovotoSource:
         )
 
 
+# Zillow writes its status into the page's own data, sometimes inside a JSON
+# string and so escaped, sometimes not. A page for a home still to let carries
+# it sixteen or seventeen times over; one that is off the market carries only
+# "OTHER", for the home and for the ones it suggests instead.
+_ZILLOW_FOR_RENT = re.compile(r'\\?"homeStatus\\?"\s*:\s*\\?"FOR_RENT\\?"')
+
+# What a reader sees on the same page: the chip over the photographs, and the
+# button Zillow offers the owner in place of a rent.
+_ZILLOW_OFF_MARKET = re.compile(r"Off market|Claim home")
+
+
 class ZillowSource:
     """Read the San Francisco rentals Zillow publishes on its own search page.
 
@@ -3338,6 +3368,10 @@ class ZillowSource:
     """
 
     platform = "Zillow"
+    # Its cards say FOR_RENT for homes its own pages call off the market, so
+    # a card coming back proves nothing and the page is read instead. See
+    # ``card_proves_listed`` and ``enrich`` below.
+    search_card_proves_listed = False
     mode = "automatic"
     search_url = "https://www.zillow.com/san-francisco-ca/rentals/"
     manual_reason = None
@@ -3733,6 +3767,62 @@ class ZillowSource:
             metadata=metadata,
             # Zillow marks a room let inside a home on the unit itself.
             housing_kind=ROOM if is_room else WHOLE_UNIT,
+        )
+
+    def enrich(self, client: httpx.Client, listing: ListingCandidate) -> ListingCandidate:
+        """Read the home's own page and say whether Zillow still lets it.
+
+        Zillow's search goes on returning homes its own detail page has taken
+        down. 502 Precita Ave and 161 Albion St were both arriving as
+        ``FOR_RENT`` cards on the day their pages read "Off market"; three of
+        eight active Zillow homes sampled from a real board were off the
+        market, which is a fifth of that board sitting on the shortlist
+        unrentable. Absence cannot catch them -- the search keeps returning
+        them -- and this source could not read its own inventory either, so
+        until now a Zillow home could only leave by ageing out after 21 days.
+
+        The page is believed only when it says the same thing twice: nothing
+        anywhere on it that Zillow marks ``FOR_RENT``, and a marker a reader
+        would see for themselves. Measured over ten real pages the two never
+        disagreed. A page that fails to render its data says neither, and is
+        left meaning nothing -- an unread page must never cost a home its
+        place.
+        """
+        response = client.get(listing.original_url, headers=_BROWSER_HEADERS, follow_redirects=True)
+        # A listing Zillow has removed outright, stated as plainly as
+        # Craigslist's 410 and read the same way.
+        if response.status_code in (404, 410):
+            return replace(
+                listing,
+                metadata={
+                    **listing.metadata,
+                    "zillow_page_checked": True,
+                    "verified_inactive": True,
+                    "verification_concern": (
+                        f"Verified inactive: Zillow answered {response.status_code} for this home."
+                    ),
+                },
+            )
+        document = _require_page(response, self.platform)
+        metadata = {**listing.metadata, "zillow_page_checked": True}
+        if _ZILLOW_FOR_RENT.search(document):
+            # Still let, and now said by the page rather than by a card. The
+            # copy is new so the recheck records that the page was read; the
+            # listing itself is unchanged.
+            return replace(listing, metadata=metadata)
+        if not _ZILLOW_OFF_MARKET.search(document):
+            # Neither signal. The page answered but told us nothing we can
+            # act on, so the home is left exactly as it was and tried again.
+            return listing
+        return replace(
+            listing,
+            metadata={
+                **metadata,
+                "verified_inactive": True,
+                "verification_concern": (
+                    "Verified inactive: Zillow's page for this home is off the market."
+                ),
+            },
         )
 
 

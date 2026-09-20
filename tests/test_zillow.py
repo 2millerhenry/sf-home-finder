@@ -25,11 +25,14 @@ import yaml
 
 from sf_housing.classification import ROOM, WHOLE_UNIT
 from sf_housing.preferences import Preferences, parse_preferences
+from sf_housing.models import ListingCandidate
 from sf_housing.sources import (
     DEEP_SWEEP_TRIGGER,
+    CraigslistSource,
     PartialReadError,
     SourceError,
     ZillowSource,
+    card_proves_listed,
     default_sources,
 )
 from tests.conftest import TEST_PREFERENCES
@@ -449,9 +452,15 @@ def test_the_page_no_longer_offers_zillow_as_something_to_set_up(tmp_path) -> No
     assert "Zillow" not in offered, offered
 
 
-def test_zillow_needs_no_detail_fetch() -> None:
+def test_a_newly_collected_zillow_home_needs_no_page_fetched_for_it() -> None:
+    """The card carries everything a new home needs, so nothing is spent
+    filling one in. That is what a detail budget of zero buys, and it is
+    unchanged -- ``enrich`` exists for the other question, asked later: is
+    this home still let? The card cannot answer that one (see
+    ``card_proves_listed``), so the page is read instead.
+    """
     assert ZillowSource.detail_budget == 0
-    assert not hasattr(ZillowSource, "enrich")
+    assert callable(ZillowSource.enrich)
 
 
 def test_the_source_keeps_no_per_deal_state() -> None:
@@ -1029,3 +1038,105 @@ def test_the_page_leads_with_the_names_somebody_recognises(tmp_path) -> None:
 
     assert shown[:3] == ["Zillow", "Trulia", "Redfin"], shown[:6]
     assert shown.index("Zillow") < shown.index("AvalonBay"), shown
+
+
+# ---------------------------------------------------------------------------
+# reading a home's own page, because the card cannot be taken at its word
+# ---------------------------------------------------------------------------
+
+# The two shapes, cut down from real pages. A live one carries the status
+# inside a JSON string, so it arrives escaped; an off-market one carries only
+# "OTHER", for this home and the ones Zillow suggests instead of it.
+LIVE_PAGE = (
+    '<html><body><script>{"props":"{\\"homeStatus\\":\\"FOR_RENT\\",'
+    '\\"price\\":3200}"}</script><h1>$3,200/mo</h1>Request a tour</body></html>'
+)
+OFF_MARKET_PAGE = (
+    '<html><body><span>Off market</span><h1>Price Unknown</h1>'
+    '<script>{"homeStatus":"OTHER"}</script><button>Claim home</button></body></html>'
+)
+
+
+def a_home() -> ListingCandidate:
+    return ListingCandidate(
+        platform="Zillow",
+        source_id="465182922",
+        title="502 Precita Ave",
+        original_url="https://www.zillow.com/homedetails/502-Precita-Ave/465182922_zpid/",
+        price=7395,
+        neighborhood="Bernal Heights",
+    )
+
+
+def read(page: FakeResponse) -> ListingCandidate:
+    return ZillowSource().enrich(FakeClient(page), a_home())
+
+
+def test_a_home_whose_own_page_is_off_the_market_is_proved_gone() -> None:
+    """Zillow's search goes on returning homes its pages have taken down.
+
+    502 Precita Ave and 161 Albion St were both arriving as FOR_RENT cards on
+    the days their own pages read "Off market" -- and three of eight active
+    Zillow homes sampled from the owner's board were off the market, about 790
+    of its 2,103. Nothing could catch them: the search never stops returning
+    them, so absence says nothing, and this source had no ``enrich`` at all,
+    so the page was never read. They left only by ageing out after 21 days.
+    """
+    home = read(FakeResponse(OFF_MARKET_PAGE))
+
+    assert home.metadata["verified_inactive"] is True
+    assert "off the market" in home.metadata["verification_concern"]
+
+
+def test_a_home_its_page_still_lets_keeps_its_place_and_counts_as_read() -> None:
+    """The other half, and the one that must never be got wrong.
+
+    A new copy rather than the one passed in, because the scanner reads an
+    unchanged object as "this source went nowhere" and would not record that
+    the page had been read at all.
+    """
+    home = read(FakeResponse(LIVE_PAGE))
+
+    assert "verified_inactive" not in home.metadata
+    assert home.metadata["zillow_page_checked"] is True
+    assert home.price == 7395
+
+
+def test_a_page_that_says_neither_thing_leaves_the_home_exactly_as_it_was() -> None:
+    """An unread page must never cost a home its place.
+
+    Zillow renders its status into page data; a page that arrives without it
+    and without the words a reader would see has answered while telling us
+    nothing. The home is handed back untouched, which the scanner reads as
+    nothing learned, and it is tried again.
+    """
+    home = a_home()
+    assert ZillowSource().enrich(FakeClient(FakeResponse("<html>a wall</html>")), home) is home
+
+
+@pytest.mark.parametrize("status", [404, 410])
+def test_a_home_zillow_has_removed_outright_is_proved_gone(status: int) -> None:
+    """Said as plainly as Craigslist's 410, and read the same way."""
+    home = read(FakeResponse("", status))
+
+    assert home.metadata["verified_inactive"] is True
+    assert str(status) in home.metadata["verification_concern"]
+
+
+@pytest.mark.parametrize("status", [403, 429, 500])
+def test_a_refusal_is_never_read_as_a_home_being_gone(status: int) -> None:
+    """The failure that would matter: a site turning us away, read as every
+    home on it having been taken down."""
+    with pytest.raises(SourceError):
+        read(FakeResponse("", status))
+
+
+def test_a_zillow_card_is_not_taken_as_proof_the_home_is_still_listed() -> None:
+    """Which is what sends its homes to be re-read in the first place.
+
+    Every other source's card is its own current answer, so re-reading the
+    page it just handed over would spend the recheck allowance learning
+    nothing. Zillow's card is the one that lies.
+    """
+    assert card_proves_listed(ZillowSource) is False
+    assert card_proves_listed(CraigslistSource) is True
