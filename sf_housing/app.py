@@ -2143,7 +2143,9 @@ def create_app(
         try:
             apify_tokens.save(apify_token)
         except ApifyTokenError as exc:
-            return RedirectResponse(f"/alerts?error={quote(str(exc))}", status_code=303)
+            return RedirectResponse(
+                f"/alerts?open=facebook&error={quote(str(exc))}#facebook", status_code=303
+            )
         repository.set_connector_state(
             "apify",
             "configured_unverified",
@@ -2151,7 +2153,7 @@ def create_app(
             configured=True,
         )
         return RedirectResponse(
-            "/alerts?message=Facebook+automation+connected%3B+run+one+connector+test+when+ready",
+            "/alerts?open=facebook&message=Token+saved.+Run+the+test+below+to+check+it#facebook",
             status_code=303,
         )
 
