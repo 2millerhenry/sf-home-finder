@@ -769,7 +769,7 @@ def test_the_furnished_finder_steps_match_what_the_extension_can_do() -> None:
     import pathlib
 
     manifest = json.loads(
-        pathlib.Path("furnished_finder_chrome_bridge/manifest.json").read_text(encoding="utf-8")
+        pathlib.Path("release_assets/furnished-finder-bridge/manifest.json").read_text(encoding="utf-8")
     )
     matches = manifest["content_scripts"][0]["matches"]
     assert any("/housing/" in pattern for pattern in matches), matches

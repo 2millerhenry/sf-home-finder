@@ -2262,7 +2262,7 @@ def create_app(
     @application.post("/alerts/furnished-finder/show-folder")
     def show_furnished_finder_folder():
         installed = active_settings.data_dir.parent / "furnished-finder-bridge"
-        development = PACKAGE_DIR.parent / "furnished_finder_chrome_bridge"
+        development = PACKAGE_DIR.parent / "release_assets" / "furnished-finder-bridge"
         folder = installed if installed.is_dir() else development
         if not folder.is_dir():
             return RedirectResponse(

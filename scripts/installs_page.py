@@ -11,7 +11,7 @@ it is nought, and downloads, visitors and releases are supporting detail set
 smaller. Labels are fragments rather than sentences; anything needing a
 sentence to justify it probably should not be on the page.
 
-Colours and type are the app's own, read from DESIGN.md -- Presidio Forest on
+Colours and type are the app's own, read from docs/design.md -- Presidio Forest on
 Warm Paper, Pine Ink, Sage Divider -- so this looks like the thing it reports
 on rather than a generic dashboard.
 

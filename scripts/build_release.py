@@ -60,7 +60,7 @@ def sha256(path: Path) -> str:
 
 
 def write_extension_zip() -> Path:
-    source = ROOT / "furnished_finder_chrome_bridge"
+    source = ROOT / "release_assets" / "furnished-finder-bridge"
     target = ROOT / "sf_housing" / "static" / "furnished-finder-bridge.zip"
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name in EXTENSION_FILES:
@@ -273,7 +273,7 @@ def main() -> None:
         bridge = payload / "furnished-finder-bridge"
         bridge.mkdir()
         for name in EXTENSION_FILES:
-            shutil.copy2(ROOT / "furnished_finder_chrome_bridge" / name, bridge / name)
+            shutil.copy2(ROOT / "release_assets" / "furnished-finder-bridge" / name, bridge / name)
         shutil.copy2(wheel, payload / wheel.name)
         shutil.copy2(args.uv_bin, payload / "uv")
         (payload / "uv").chmod(0o755)

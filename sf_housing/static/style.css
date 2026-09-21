@@ -1110,7 +1110,7 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
 .anywhere-choice { margin-bottom: 14px; }
 .area-picker { display: grid; gap: 13px; }
 /* Four tiers across one surface, divided by hairlines. The old 2x2 nested a
-   filled card inside a card inside a section, which DESIGN.md rules out. */
+   filled card inside a card inside a section, which docs/design.md rules out. */
 .area-columns { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
 .area-tier { min-width: 0; padding: 14px 15px 15px; }
 .area-tier + .area-tier { border-left: 1px solid var(--line); }

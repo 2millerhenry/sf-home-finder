@@ -83,7 +83,7 @@ def main() -> None:
         bridge = payload / "furnished-finder-bridge"
         bridge.mkdir()
         for name in EXTENSION_FILES:
-            shutil.copy2(ROOT / "furnished_finder_chrome_bridge" / name, bridge / name)
+            shutil.copy2(ROOT / "release_assets" / "furnished-finder-bridge" / name, bridge / name)
         shutil.copy2(wheel, payload / wheel.name)
 
         gmail_injected = bool(args.gmail_client_json)

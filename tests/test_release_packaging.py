@@ -14,7 +14,7 @@ from sf_housing.app import FURNISHED_FINDER_BRIDGE_VERSION
 
 
 ROOT = Path(__file__).resolve().parent.parent
-EXTENSION = ROOT / "furnished_finder_chrome_bridge"
+EXTENSION = ROOT / "release_assets" / "furnished-finder-bridge"
 PACKAGED_EXTENSION = ROOT / "sf_housing" / "static" / "furnished-finder-bridge.zip"
 
 
