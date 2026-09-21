@@ -2146,14 +2146,29 @@ def create_app(
             return RedirectResponse(
                 f"/alerts?open=facebook&error={quote(str(exc))}#facebook", status_code=303
             )
+        # Saving a token is not a thing anybody wants for its own sake; they
+        # want Facebook homes. Start the bounded check here rather than making
+        # the token a first step that silently waits for a second one.
+        if scanner.start_scan("connector_test"):
+            repository.set_connector_state(
+                "apify",
+                "checking",
+                message="Running one bounded Facebook check.",
+                configured=True,
+                attempted=True,
+            )
+            return RedirectResponse(
+                "/alerts?open=facebook&message=Token+saved+and+checking+Facebook+now#facebook",
+                status_code=303,
+            )
         repository.set_connector_state(
             "apify",
             "configured_unverified",
-            message="Token saved locally. Run one bounded connection test.",
+            message="Token saved locally. A scan was already running, so the check has not started.",
             configured=True,
         )
         return RedirectResponse(
-            "/alerts?open=facebook&message=Token+saved.+Run+the+test+below+to+check+it#facebook",
+            "/alerts?open=facebook&message=Token+saved.+A+scan+is+already+running%3B+run+the+test+when+it+finishes#facebook",
             status_code=303,
         )
 
@@ -2165,7 +2180,10 @@ def create_app(
             "apify", "checking", message="Running one bounded Facebook check.", attempted=True
         )
         if not scanner.start_scan("connector_test"):
-            return RedirectResponse("/?message=Scan+already+running", status_code=303)
+            return RedirectResponse(
+                "/alerts?open=facebook&message=A+scan+is+already+running%3B+Facebook+is+part+of+it+and+this+card+will+update#facebook",
+                status_code=303,
+            )
         return RedirectResponse(
             "/alerts?open=facebook&message=Checking+Facebook+now%3B+the+result+appears+on+this+card+when+it+lands#facebook",
             status_code=303,
@@ -2181,7 +2199,10 @@ def create_app(
         source = FacebookMarketplaceSource(mailbox, apify_tokens)
         source.apify.results_limit = 40
         if not scanner.start_scan("facebook_backfill", sources=[source]):
-            return RedirectResponse("/?message=Scan+already+running", status_code=303)
+            return RedirectResponse(
+                "/alerts?open=facebook&message=A+scan+is+already+running%3B+Facebook+is+part+of+it+and+this+card+will+update#facebook",
+                status_code=303,
+            )
         return RedirectResponse(
             "/alerts?open=facebook&message=Facebook+backfill+started%3B+checking+up+to+40+recent+SF+cards#facebook",
             status_code=303,
@@ -2195,7 +2216,10 @@ def create_app(
         if not source._group_urls(load_preferences(active_settings.preferences_path)):
             return RedirectResponse("/alerts?open=facebook&open_groups=1&error=Add+a+public+group+below+first%2C+then+run+the+group+test#facebook", status_code=303)
         if not scanner.start_scan("facebook_groups_test", sources=[source]):
-            return RedirectResponse("/?message=Scan+already+running", status_code=303)
+            return RedirectResponse(
+                "/alerts?open=facebook&message=A+scan+is+already+running%3B+Facebook+is+part+of+it+and+this+card+will+update#facebook",
+                status_code=303,
+            )
         return RedirectResponse(
             "/alerts?open=facebook&open_groups=1&message=Checking+your+public+groups+now%3B+the+result+appears+on+this+card+when+it+lands#facebook",
             status_code=303,

@@ -732,10 +732,9 @@ def test_apify_token_can_be_connected_from_alerts(tmp_path: Path) -> None:
         page = client.get("/alerts")
 
     assert saved.status_code == 303
-    assert "nothing has been checked yet" in page.text, (
-        "a saved token is not a working connection, and the page has to say so"
+    assert "Checking now" in page.text, (
+        "saving the token starts the check itself, and the card has to say so"
     )
-    assert "Run the test on this card" in page.text, "and has to say what to do about it"
     assert 'name="apify_token"' in page.text
     assert "Replace the token" in page.text, "and offers a way to change it"
 
@@ -1825,10 +1824,20 @@ def test_the_panel_says_how_much_longer_in_exactly_one_place(tmp_path: Path) -> 
     """It carried two: a live estimate from what the sources really take, and
     beside it a static "usually about 152s" that was there first. One of them
     was always stale, and on a small panel that reads as the app not knowing."""
-    application = create_app(settings=app_settings(tmp_path), sources=[], enable_scheduler=False)
+    # With no sources the scan finishes before the page can be fetched, so the
+    # panel this test is about is legitimately absent and the run fails on
+    # timing rather than on the thing it checks. Hold the scan open instead.
+    started, release = threading.Event(), threading.Event()
+    application = create_app(
+        settings=app_settings(tmp_path),
+        sources=[WaitingDashboardSource(started, release)],
+        enable_scheduler=False,
+    )
     with TestClient(application) as client:
         client.post("/scan", follow_redirects=False)
+        assert started.wait(timeout=2)
         page = client.get("/").text
+        release.set()
 
     assert "data-scan-estimate" not in page, "the second estimate is back"
     assert "Usually about" not in page
@@ -1912,3 +1921,24 @@ def test_a_group_with_no_token_is_told_what_is_missing(tmp_path: Path) -> None:
         page = client.get("/alerts?open=facebook&open_groups=1")
 
     assert "Add the Apify token above before these groups can be checked." in page.text
+
+
+def test_saving_a_token_starts_the_check_without_a_second_click(tmp_path: Path) -> None:
+    """Nobody wants a saved token; they want Facebook homes. The token was a
+    first step that silently waited for a second one nobody knew to take."""
+    settings = app_settings(tmp_path)
+    application = create_app(settings=settings, sources=[], enable_scheduler=False)
+
+    with TestClient(application) as client:
+        saved = client.post(
+            "/alerts/apify/token",
+            data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
+            follow_redirects=False,
+        )
+        state = application.state.repository.connector_state("apify")
+
+    assert saved.status_code == 303
+    assert "open=facebook" in saved.headers["location"], "and lands on the open card"
+    assert state is not None and state.state == "checking", (
+        "the check is already running, not merely offered"
+    )
