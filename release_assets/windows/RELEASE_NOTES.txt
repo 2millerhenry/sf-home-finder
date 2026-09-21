@@ -1,3 +1,24 @@
+SF Home Finder 0.5.14 for Windows x64
+
+Clicking a column heading sorts by it, and clicking it again turns it over.
+Score, Price and Posted, with an arrow saying which way the column is sorted.
+Reversing a column turns over that column and nothing else: a home its source
+has stopped listing still sorts below the ones still showing, because that is
+the board saying how far a row can be trusted rather than an order to flip.
+
+Move-in has left the table. Seven of 439 homes on one real shortlist stated
+one, so the column was a stack of "Not stated". The date is still collected,
+still on the home's own row, and still in the Order menu. Posted takes its
+place, next to the listing it belongs to.
+
+The size and the bathrooms are one line -- "1 br / 1 bath" -- with the
+building size quieter underneath, and the bathroom count now arrives from two
+more sites. ApartmentGuide and Trulia both published it all along and neither
+was read; between them that is 784 homes on one board that could only say
+"Baths n/a". Where a building lets one-bath and two-bath homes alike it still
+says nothing, because neither number describes the home you are looking at.
+
+
 SF Home Finder 0.5.13 for Windows x64
 
 A Zillow home is checked as it arrives, and Zillow is left alone the rest
