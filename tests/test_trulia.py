@@ -662,3 +662,33 @@ def test_a_sweep_is_never_shallower_than_a_normal_run() -> None:
 
     assert _pages_for_trigger(Unpaged(), DEEP_SWEEP_TRIGGER) == 4
     assert _pages_for_trigger(Unpaged(), "scheduled") == 4
+
+
+# --------------------------------------------------------------------------
+# the bathroom count, stated the same way the bedrooms are
+# --------------------------------------------------------------------------
+
+
+def test_a_home_carries_the_bathroom_count_trulia_states(preferences) -> None:
+    """99 Trulia homes on the owner's board, not one with a bathroom count,
+    while the card said "1 Bath" in the same shape it states the bedrooms.
+
+    Three of the four homes on the captured page say it plainly; the fourth
+    covers a range and is left blank, which is the same refusal the bedroom
+    reader beside it makes.
+    """
+    found = TruliaSource().search(FakeClient(FakeResponse(search_page())), preferences)
+    counted = [home for home in found if home.metadata.get("bathrooms") is not None]
+
+    assert counted, "no Trulia home carried a bathroom count"
+    assert all(0 < float(home.metadata["bathrooms"]) <= 12 for home in counted)
+
+
+def test_a_building_whose_bathroom_range_is_open_states_nothing(preferences) -> None:
+    """The half that matters. A building letting one-bath and two-bath homes
+    says neither about the one on the card, so nothing is written rather than
+    whichever end of the range would look better on the shortlist."""
+    from sf_housing.sources import _stated_bathrooms
+
+    assert _stated_bathrooms({"bathrooms": {"formattedValue": "1 Bath", "min": 1, "max": 1}}) == 1.0
+    assert _stated_bathrooms({"bathrooms": {"formattedValue": "1-2 Baths", "min": 1, "max": 2}}) is None

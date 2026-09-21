@@ -1818,7 +1818,10 @@ def _stated_bathrooms(*records: object) -> float | None:
             # other twenty stay unknown rather than being handed whichever
             # end of the range reads better.
             if isinstance(value, dict):
-                low, high = value.get("low"), value.get("high")
+                # Written low/high by the Rent Group's pages and min/max by
+                # Trulia's; the same range either way.
+                low = value.get("low", value.get("min"))
+                high = value.get("high", value.get("max"))
                 value = low if low == high else None
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 continue
@@ -3060,6 +3063,11 @@ class TruliaSource:
         if not name:
             return None
 
+        # Trulia states the bathrooms the same way it states the bedrooms: a
+        # range over the building, which says what this home has only where
+        # it has collapsed to one number. 99 of its homes on the owner's
+        # board carried no count at all while this sat in the card.
+        trulia_baths = _stated_bathrooms(home)
         bedrooms = home.get("bedrooms") if isinstance(home.get("bedrooms"), dict) else {}
         # Read as numbers rather than formatted into a string for _bedroom_span:
         # a card with a max and no min renders as "None 2", from which the span
@@ -3081,6 +3089,8 @@ class TruliaSource:
         metadata: dict[str, object] = {"building_listing": True}
         if street:
             metadata["address"] = street
+        if trulia_baths is not None:
+            metadata["bathrooms"] = trulia_baths
         detail = [f"{name} listed on Trulia."]
         if street:
             detail.append(f"Address: {street}.")
