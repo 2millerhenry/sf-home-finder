@@ -710,3 +710,57 @@ def test_a_building_with_one_home_left_says_so_in_english() -> None:
 
 def test_the_count_of_free_homes_is_rendered_for_real(preferences) -> None:
     assert "11 homes are free right now." in (by_id(found(preferences))[ISLE_HOUSE].summary or "")
+
+
+# ---------------------------------------------------------------------------
+# the bathroom count, which was in the payload all along
+# ---------------------------------------------------------------------------
+
+
+def test_a_building_whose_plans_agree_states_its_bathroom_count() -> None:
+    """Every ApartmentGuide home read "Baths n/a" while the number sat in the
+    payload the parser had already opened -- 36 of the owner's shortlisted
+    homes from this source, not one with a count. The search result carries
+    the range its matching plans cover, and where that range has collapsed to
+    a single number it is what this home has.
+    """
+    from sf_housing.sources import _stated_bathrooms
+
+    assert _stated_bathrooms({"baths": {"low": 1, "high": 1}}) == 1.0
+    assert _stated_bathrooms({"floorPlans": [{"bathCount": 2}, {"bathCount": 2}]}) == 2.0
+
+
+def test_a_building_letting_different_sized_homes_states_nothing() -> None:
+    """A building with one-bath and two-bath homes says neither about the one
+    being shown, and handing over either end of the range would be inventing
+    the answer rather than reading it. Twenty of fifty buildings on a real
+    page are in exactly this position."""
+    from sf_housing.sources import _stated_bathrooms
+
+    assert _stated_bathrooms({"baths": {"low": 1, "high": 2}}) is None
+    assert _stated_bathrooms({"floorPlans": [{"bathCount": 1}, {"bathCount": 2}]}) is None
+
+
+@pytest.mark.parametrize("stated", [0, -1, 99, True, "two", None, {}])
+def test_a_count_that_is_not_a_count_is_left_unknown(stated: object) -> None:
+    """Zero is a plan that states none rather than a home without a bathroom,
+    and a number past a dozen belongs to some other field. A blank is worth
+    more than either."""
+    from sf_housing.sources import _stated_bathrooms
+
+    assert _stated_bathrooms({"bathCount": stated}) is None
+
+
+def test_the_refusal_holds_on_the_real_capture(preferences) -> None:
+    """End to end, on a page ApartmentGuide really served.
+
+    Every one of its five buildings lets both one-bath and two-bath homes,
+    so every one of them states a range of 1 to 2 and none of them says what
+    the home being shown has. Reading a count out of any of them would be
+    the invention this refuses to make -- and on a live page thirty of fifty
+    buildings do collapse to one number and are read.
+    """
+    listings = by_id(found(preferences))
+
+    assert listings, "the fixture read no homes at all"
+    assert all(l.metadata.get("bathrooms") is None for l in listings.values())

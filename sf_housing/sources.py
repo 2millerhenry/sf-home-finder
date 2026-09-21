@@ -1775,6 +1775,58 @@ def _pages_for_trigger(source: object, trigger: str) -> int:
 # still raises, because a source that really is blocked has to be reported as
 # blocked rather than as a quiet zero.
 
+def _stated_bathrooms(*records: object) -> float | None:
+    """A bathroom count one of these records states, or None.
+
+    Rent.com and ApartmentGuide both publish ``bathCount`` on a floor plan,
+    and Redfin publishes ``numBaths``. None of the three was read, so every
+    one of their homes showed "Baths n/a" while the number sat in the payload
+    the parser had already opened -- 73 of the 439 homes on the owner's
+    shortlist, and on one search page alone ApartmentGuide stated 491 of
+    them.
+
+    Zero is a plan that states no bathroom rather than a home without one,
+    and a number past a dozen belongs to some other field, so both are left
+    unknown -- the same bar ``bathrooms_from_listing`` applies to the text.
+    """
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        # Rent.com and ApartmentGuide write the count on each floor plan
+        # rather than on the building. They say the same thing about the
+        # home only when the plans agree; a building letting one-bath and
+        # two-bath homes states neither about the one being shown.
+        plans = record.get("floorPlans")
+        if isinstance(plans, list) and plans:
+            counts = {
+                float(plan["bathCount"])
+                for plan in plans
+                if isinstance(plan, dict)
+                and isinstance(plan.get("bathCount"), (int, float))
+                and not isinstance(plan.get("bathCount"), bool)
+            }
+            if len(counts) == 1:
+                only = counts.pop()
+                if 0 < only <= 12:
+                    return only
+        for key in ("bathCount", "numBaths", "bathrooms", "baths"):
+            value = record.get(key)
+            # Several of these payloads describe a building rather than a
+            # home, and write the range its plans cover. A range says what
+            # this home has only once it has collapsed to a single number --
+            # 30 of the 50 buildings on one ApartmentGuide page -- and the
+            # other twenty stay unknown rather than being handed whichever
+            # end of the range reads better.
+            if isinstance(value, dict):
+                low, high = value.get("low"), value.get("high")
+                value = low if low == high else None
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if 0 < float(value) <= 12:
+                return float(value)
+    return None
+
+
 def _require_page(response: httpx.Response, platform: str) -> str:
     """Return a page of results, or refuse to read a wall as an empty result.
 
@@ -2021,6 +2073,11 @@ class RedfinSource:
         metadata: dict[str, object] = {"building_listing": True}
         if street:
             metadata["address"] = street
+        # No bathroom count here. Redfin's rental cards state none, and the
+        # only "numBaths" anywhere on its search page belongs to the agents'
+        # past-sale blurbs further down it -- somebody else's three-bedroom,
+        # sold, with an escrow story attached. Reading that would put a
+        # stranger's bathroom on a home for rent.
         detail = [f"{name} listed on Redfin."]
         if street:
             detail.append(f"Address: {street}.")
@@ -2371,6 +2428,9 @@ class RentComSource:
         metadata: dict[str, object] = {"building_listing": True, "detail_pending": True}
         if street:
             metadata["address"] = street
+        baths = _stated_bathrooms(block)
+        if baths is not None:
+            metadata["bathrooms"] = baths
 
         return ListingCandidate(
             platform=self.platform,
@@ -2735,6 +2795,10 @@ class ApartmentGuideSource:
         sizes = _other_bedroom_sizes(rows, beds)
         if sizes:
             detail.append("This building also lets " + ", ".join(sizes[:6]) + ".")
+
+        baths = _stated_bathrooms(matched)
+        if baths is not None:
+            metadata["bathrooms"] = baths
 
         available = (matched or {}).get("totalAvailable")
         if isinstance(available, (int, float)) and not isinstance(available, bool) and available > 0:
