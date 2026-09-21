@@ -132,7 +132,23 @@ def spelled_count(value: int) -> str:
     return _SPELLED[value] if 0 <= value < len(_SPELLED) else str(value)
 
 
-VALID_SORTS = frozenset({"score", "contact", "available", "newest", "price", "unopened", "closeness"})
+VALID_SORTS = frozenset({
+    "score", "contact", "available", "newest", "price", "unopened", "closeness",
+    # The reversals a second click on a heading asks for. Named rather than
+    # carried as a separate direction parameter, so a link is still one value
+    # a reader can read, share and bookmark.
+    "score_asc", "price_desc", "oldest",
+})
+# A sortable column heading: the sort it asks for first, which way round
+# that is, and the sort that turns it over. Only these three columns sort --
+# the rest hold prose, which has no order a reader would mean.
+SORT_COLUMNS = {
+    "score": ("score", "descending", "score_asc"),
+    "price": ("price", "ascending", "price_desc"),
+    "newest": ("newest", "descending", "oldest"),
+}
+SORT_ARROWS = {"ascending": "\u2191", "descending": "\u2193"}
+
 VALID_VIEWS = frozenset({"active", "saved", "dismissed", "near_matches", "all"})
 # Older links said whole_unit or lumped the splits together; send them to the
 # first size they actually cover rather than 404ing a bookmark.
@@ -1186,8 +1202,34 @@ def create_app(
         }
         sort_urls = {
             sort_name: "/?" + "&".join([f"sort={sort_name}", *view_query_parts])
-            for sort_name in ("score", "contact", "price", "available", "newest", "unopened")
+            for sort_name in (
+                "score", "contact", "price", "available", "newest", "unopened",
+                "score_asc", "price_desc", "oldest",
+            )
         }
+        # What each sortable heading does when it is clicked, and which way
+        # its column is sorted now. Clicking a heading sorts by it; clicking
+        # the one already in use turns it over. Two states and no third, so a
+        # reader never has to work out where they are in a cycle.
+        #
+        # The arrow says how the column is sorted, not where a click would
+        # take it -- which is the way every table a reader has used says it.
+        # The score's arrow is withheld while the order is an estimate of
+        # ranking rather than the ranking itself, exactly as before.
+        sort_columns = {}
+        for column, (plain, plain_way, reversed_sort) in SORT_COLUMNS.items():
+            other_way = "ascending" if plain_way == "descending" else "descending"
+            if sort == plain and not (column == "score" and selection.estimated_order):
+                direction, target = plain_way, sort_urls[reversed_sort]
+            elif sort == reversed_sort:
+                direction, target = other_way, sort_urls[plain]
+            else:
+                direction, target = None, sort_urls[plain]
+            sort_columns[column] = {
+                "url": target,
+                "direction": direction,
+                "arrow": SORT_ARROWS.get(direction, ""),
+            }
         recent_scans = repository.recent_scans()
         scan_progress = scanner.progress
         schedule_state = schedule_health(
@@ -1248,6 +1290,7 @@ def create_app(
                 ),
                 "return_to": return_to,
                 "sort_urls": sort_urls,
+                "sort_columns": sort_columns,
                 "exclusion_summary": exclusion_summary,
                 "excluded_total": sum(int(item["count"]) for item in exclusion_summary),
                 "cross_tab": cross_tab,

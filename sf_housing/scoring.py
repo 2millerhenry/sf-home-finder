@@ -16,6 +16,7 @@ from .classification import (
     TWO_BEDROOM,
     WHOLE_UNIT,
     classify_listing,
+    short_unit_type_label,
     unit_type_label,
 )
 from .location import (
@@ -1227,7 +1228,22 @@ def _score_whole_unit(listing: ListingCandidate, preferences: Preferences) -> Sc
         bath_label = f"{int(bathrooms)} bath" if bathrooms == 1 else f"{int(bathrooms)} baths"
     else:
         bath_label = f"{bathrooms:g} baths"
-    secondary_facts = [bath_label, building_label]
+    # The size and the bathrooms read as one fact, because that is how they
+    # are read: "1 br / 1 bath", the two given equal weight rather than the
+    # bathroom trailing the bedroom as an afterthought. The building line
+    # goes underneath, quieter, where it says nothing nine times in ten.
+    #
+    # Only where there are two facts to weigh, though. "Studio / Baths n/a"
+    # balances a fact against a gap and makes the gap the loudest thing in
+    # the row, so an unstated bathroom count goes quietly underneath with the
+    # building instead, and the top line is simply the size.
+    short_type = short_unit_type_label(listing.unit_type)
+    if bathrooms is None:
+        type_and_baths = short_type
+        secondary_facts = [bath_label, building_label]
+    else:
+        type_and_baths = f"{short_type} / {bath_label}"
+        secondary_facts = [building_label]
     if is_sublet and sublet_months is not None and sublet_term_eligible:
         secondary_facts.insert(0, f"{sublet_months}-month sublet")
     if per_person_monthly is not None:
@@ -1291,7 +1307,7 @@ def _score_whole_unit(listing: ListingCandidate, preferences: Preferences) -> Sc
         "search_mode": "split_unit" if is_split_unit else "whole_unit",
         "per_person_monthly": per_person_monthly,
         "occupants": occupants if is_split_unit else None,
-        "home_facts": {"primary": type_label, "secondary": secondary_facts},
+        "home_facts": {"primary": type_and_baths, "secondary": secondary_facts},
         "sublease": {
             "is_sublease": is_sublet,
             "minimum_months": sublet_months,

@@ -209,16 +209,28 @@
     <table class="listing-table">
       <thead>
         <tr>
-          <th scope="col" class="cell-score"{% if sort == 'score' and not estimated_order %} aria-sort="descending"{% endif %}><a href="{{ sort_urls.score }}">Score <span aria-hidden="true">{% if sort == 'score' and not estimated_order %}↓{% endif %}</span></a></th>
+          {#- A sortable heading carries its own state: where a click goes,
+              which way the column is sorted now, and the arrow that says so.
+              Worked out once in app.py (SORT_COLUMNS) so the three headings
+              cannot drift apart, and so a second click is always the
+              reversal rather than a cycle a reader has to keep count of. -#}
+          {%- set score_sort = sort_columns.score -%}
+          {%- set price_sort = sort_columns.price -%}
+          {%- set posted_sort = sort_columns.newest -%}
+          <th scope="col" class="cell-score"{% if score_sort.direction %} aria-sort="{{ score_sort.direction }}"{% endif %}><a class="sortable{% if score_sort.direction %} is-sorted{% endif %}" href="{{ score_sort.url }}">Score <span class="sort-arrow" aria-hidden="true">{{ score_sort.arrow }}</span></a></th>
           <th scope="col" class="cell-quick-open">Contact</th>
-          <th scope="col" class="cell-price"{% if sort == 'price' %} aria-sort="ascending"{% endif %}><a href="{{ sort_urls.price }}">{% if housing_mode == 'two_bedroom' %}Total / person{% else %}Price{% endif %} <span aria-hidden="true">{% if sort == 'price' %}↑{% endif %}</span></a></th>
+          <th scope="col" class="cell-price"{% if price_sort.direction %} aria-sort="{{ price_sort.direction }}"{% endif %}><a class="sortable{% if price_sort.direction %} is-sorted{% endif %}" href="{{ price_sort.url }}">{% if housing_mode == 'two_bedroom' %}Total / person{% else %}Price{% endif %} <span class="sort-arrow" aria-hidden="true">{{ price_sort.arrow }}</span></a></th>
           <th scope="col" class="cell-area">Area</th>
           <th scope="col" class="cell-home">{% if housing_mode != 'room' %}Type &amp; building{% else %}Home &amp; room{% endif %}</th>
-          <th scope="col" class="cell-available"{% if sort == 'available' %} aria-sort="ascending"{% endif %}><a href="{{ sort_urls.available }}">Move-in <span aria-hidden="true">{% if sort == 'available' %}↑{% endif %}</span></a></th>
+          {#- Posted sits where Move-in used to. Move-in was stated by 7 of
+              the 439 homes on the owner's shortlist, so the column was a
+              stack of "Not stated" nine times out of ten; the date is still
+              collected, still sortable from the Order menu, and still shown
+              on the home's own row when a source states one. -#}
+          <th scope="col" class="cell-found"{% if posted_sort.direction %} aria-sort="{{ posted_sort.direction }}"{% endif %}><a class="sortable{% if posted_sort.direction %} is-sorted{% endif %}" href="{{ posted_sort.url }}">Posted <span class="sort-arrow" aria-hidden="true">{{ posted_sort.arrow }}</span></a></th>
           <th scope="col" class="cell-listing">Listing</th>
           <th scope="col" class="cell-fit">Best matches</th>
           <th scope="col" class="cell-check">Check</th>
-          <th scope="col" class="cell-found"{% if sort == 'newest' %} aria-sort="descending"{% endif %}><a href="{{ sort_urls.newest }}">Posted <span aria-hidden="true">{% if sort == 'newest' %}↓{% endif %}</span></a></th>
           <th scope="col" class="cell-actions"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
@@ -269,8 +281,12 @@
             <strong>{{ listing.home_facts.primary or listing.listing_type or 'Room details unknown' }}</strong>
             {% if listing.home_facts.secondary %}<span>{{ listing.home_facts.secondary|join(' · ') }}</span>{% endif %}
           </td>
-          <td class="cell-available">
-            {% if listing.available_on %}<strong>{{ listing.available_on|compact_move_in_date }}</strong><span>available</span>{% else %}<span class="unknown">Not stated</span>{% endif %}
+          <td class="cell-found">
+            {% if listing.published_at %}
+              <span title="Posted {{ listing.published_at|pacific_datetime }}">{{ listing.published_at|compact_pacific_date }}</span>
+            {% else %}
+              <span class="found-only" title="The source does not publish a date. Found {{ listing.first_found|pacific_datetime }}">Found {{ listing.first_found|compact_pacific_date }}</span>
+            {% endif %}
           </td>
           <td class="cell-listing">
             <h3 title="{{ listing.title }}"><a class="listing-title-link" href="/listings/{{ listing.id }}?from={{ return_to|urlencode }}">{{ listing.title }}</a></h3>
@@ -340,13 +356,6 @@
             <span class="{% if listing.concern[:8] == 'Unknown:' %}unknown{% endif %}">{{ listing.concern }}</span>
             {%- endif -%}
           </td>
-          <td class="cell-found">
-            {% if listing.published_at %}
-              <span title="Posted {{ listing.published_at|pacific_datetime }}">{{ listing.published_at|compact_pacific_date }}</span>
-            {% else %}
-              <span class="found-only" title="The source does not publish a date. Found {{ listing.first_found|pacific_datetime }}">Found {{ listing.first_found|compact_pacific_date }}</span>
-            {% endif %}
-          </td>
           <td class="cell-actions">
             <div class="row-actions">
               <form method="post" action="/listings/{{ listing.id }}/status">
@@ -382,7 +391,10 @@
           <td class="cell-score"><strong>{{ other.score }}</strong>{% if other.eligibility == 'ineligible' %}<small class="ineligible-label">Outside deal</small>{% endif %}</td>
           <td class="cell-quick-open"><a class="quick-open" href="/listings/{{ other.id }}/open" target="_blank" rel="noopener noreferrer" aria-label="Open this home on {{ other.platform }}" data-mark-opened="/listings/{{ other.id }}/opened">Open <span aria-hidden="true">↗</span></a></td>
           <td class="cell-price">{% if other.price is not none %}<strong>${{ "{:,}".format(other.price) }}</strong><span>/mo</span>{% else %}<span>Unknown</span>{% endif %}</td>
-          <td class="cell-copy-note" colspan="9">
+          {#- Three cells of its own and the rest of the row: ten columns in
+              the head, three here, so seven. It said nine, which was one too
+              many even before Move-in came out of the table. -#}
+          <td class="cell-copy-note" colspan="7">
             <strong>Same home on {{ other.platform }}</strong>
             {%- if other.disagreement == 'status' %}{% if other.shown_inactive %} · {{ listing.platform }} says it is no longer listed; {{ other.platform }} still lists it{% elif other.verified_inactive %} · {{ other.platform }} says it is no longer listed{% elif other.eligibility == 'ineligible' and other.blockers %} · {{ other.platform }}'s listing puts it outside your deal: {{ other.blockers[0].reason }}{% elif other.eligibility == 'ineligible' %} · {{ other.platform }}'s listing puts it outside your deal{% else %} · {{ other.platform }}'s listing fits your deal where this one does not{% endif %}
             {%- elif other.disagreement == 'price' %} · the two sites quote different rents{% if listing.price is not none and other.price is not none %} (${{ "{:,}".format(listing.price) }} and ${{ "{:,}".format(other.price) }}){% endif %}; ask which is current

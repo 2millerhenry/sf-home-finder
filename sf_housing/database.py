@@ -2551,6 +2551,19 @@ class Repository:
             # The column reads "Posted", so newest must mean newest posted.
             # Sources that publish no date fall back to when we found it.
             "newest": "COALESCE(published_at, first_found) DESC, score DESC",
+            # The three reversals, for clicking a column heading twice.
+            #
+            # Each turns over its own column and nothing else. A home whose
+            # source has stopped listing it still sorts below the ones still
+            # showing, and a rent nobody believes still sorts below the ones
+            # that are -- those are not orderings, they are the board's
+            # answer about how much a row can be trusted, and reversing them
+            # would put the least trustworthy homes on top of the page.
+            # Homes with no rent and no posting date stay last either way,
+            # for the same reason: an unknown is not an extreme.
+            "score_asc": f"{still_showing_first}, {believable_rents_first}, home_score ASC, score ASC, confidence DESC, COALESCE(published_at, first_found) DESC",
+            "price_desc": "rank_price IS NULL, rank_price DESC, score DESC",
+            "oldest": "COALESCE(published_at, first_found) ASC, score DESC",
             # Soonest stated move-in first, homes stating none last: "0" and
             # the date, or "1" -- one reading of the JSON per row.
             "available": f"COALESCE('0' || NULLIF({_AVAILABLE_ON}, ''), '1'), score DESC, first_found ASC",

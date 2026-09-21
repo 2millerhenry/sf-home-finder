@@ -287,6 +287,19 @@ def classify_listing(listing: ListingCandidate) -> ListingCandidate:
     )
 
 
+def short_unit_type_label(value: str | None) -> str:
+    """The same type, short enough to sit beside the bathroom count.
+
+    "1 bedroom - 1 bath" read as though the bedroom were the fact and the
+    bath an afterthought, and on a tab that already says which size it is
+    showing, the long form is the least useful word in the row. "1 br /
+    1 bath" gives the two equal weight, which is how somebody reads them.
+    """
+    return {STUDIO: "Studio", ONE_BEDROOM: "1 br", TWO_BEDROOM: "2 br", THREE_BEDROOM: "3 br"}.get(
+        value or "", unit_type_label(value)
+    )
+
+
 def unit_type_label(value: str | None) -> str:
     if value == STUDIO:
         return "Studio"

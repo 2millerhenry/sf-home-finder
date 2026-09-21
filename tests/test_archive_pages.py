@@ -408,9 +408,11 @@ def test_a_home_starred_on_page_three_returns_to_page_three(archive: Archive) ->
         assert 'href="/?sort=score&amp;view=all&amp;page=3">← Back to the archive' in details
 
     # A new order, another tab or new filters start again at page one.
-    sorting = re.findall(r'<th scope="col" class="cell-[a-z-]+"[^>]*><a href="([^"]+)"', page)
+    # The heading's own anchor carries a class now, and Move-in is no
+    # longer a column, so three headings sort rather than four.
+    sorting = re.findall(r'<th scope="col" class="cell-[a-z-]+"[^>]*><a [^>]*href="([^"]+)"', page)
     tabs = re.findall(r'<nav class="(?:view|housing)-tabs".*?</nav>', page, re.S)
-    assert len(sorting) == 4 and not any("page=" in href for href in sorting)
+    assert len(sorting) == 3 and not any("page=" in href for href in sorting)
     assert tabs and not any("page=" in nav for nav in tabs)
     assert "page" not in FilterForm(page).fields
     assert FilterForm(page).csv_download()[1]["page"] == "3"

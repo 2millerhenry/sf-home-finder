@@ -80,9 +80,11 @@ def test_whole_unit_one_bedroom_accepts_small_known_building_and_rejects_large_o
     large_result = score_listing(large, profile)
 
     assert small_result.score >= profile.minimum_score
+    # Size and bathrooms are one line now, given equal weight, with the
+    # building underneath: "1 br / 1 bath" over "24-unit building".
     assert small_result.details["home_facts"] == {
-        "primary": "1 bedroom",
-        "secondary": ["1 bath", "24-unit building"],
+        "primary": "1 br / 1 bath",
+        "secondary": ["24-unit building"],
     }
     assert large_result.score < profile.minimum_score
     assert "above your 50-unit maximum" in large_result.concern
@@ -225,8 +227,10 @@ def test_two_bedroom_uses_a_two_person_split_and_hard_total_cap() -> None:
     assert match_result.score >= profile.minimum_score
     assert match_result.details["search_mode"] == "split_unit"
     assert match_result.details["per_person_monthly"] == 2600
+    # No bathroom count here, so there is nothing to weigh the size against
+    # and the gap goes quietly underneath rather than into the top line.
     assert match_result.details["home_facts"] == {
-        "primary": "2 bedrooms",
+        "primary": "2 br",
         "secondary": ["$2,600/person for 2", "Baths n/a", "12-unit building"],
     }
     assert over_result.score < profile.minimum_score
@@ -262,7 +266,7 @@ def test_three_bedroom_uses_three_people_and_its_own_exact_cap() -> None:
     assert match_result.details["per_person_monthly"] == 2500
     assert match_result.details["occupants"] == 3
     assert match_result.details["home_facts"] == {
-        "primary": "3 bedrooms",
+        "primary": "3 br",
         "secondary": ["$2,500/person for 3", "Baths n/a", "10-unit building"],
     }
     assert over_result.score < profile.minimum_score
