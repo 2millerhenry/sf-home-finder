@@ -1164,6 +1164,10 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
 .connector-state.checking, .connector-state.configured_unverified { color: var(--accent); }
 .connector-state.degraded, .connector-state.authorization_expired, .connector-state.quota_blocked { border-color: oklch(83% 0.06 73); background: var(--amber-soft); color: var(--amber); }
 .connector-message { padding: 9px 11px; border-radius: 9px; background: var(--surface-muted); color: var(--ink) !important; }
+/* The message says what the last check found; the next step says where that
+   leaves you. A badge on its own answers neither. */
+.connector-next-step { margin: 9px 0 0; color: var(--ink); font-weight: 600; }
+.connector-when { margin: 3px 0 0; color: var(--muted); font-size: 0.78rem; }
 .connector-action { margin-top: 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .connector-action > span { color: var(--muted); font-size: 0.73rem; }
 .connector-action form { margin: 0; }

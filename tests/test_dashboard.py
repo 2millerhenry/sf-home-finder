@@ -732,9 +732,10 @@ def test_apify_token_can_be_connected_from_alerts(tmp_path: Path) -> None:
         page = client.get("/alerts")
 
     assert saved.status_code == 303
-    assert "called Working only after a real bounded check succeeds" in page.text, (
+    assert "nothing has been checked yet" in page.text, (
         "a saved token is not a working connection, and the page has to say so"
     )
+    assert "Run the test on this card" in page.text, "and has to say what to do about it"
     assert 'name="apify_token"' in page.text
     assert "Replace the token" in page.text, "and offers a way to change it"
 
@@ -1844,3 +1845,70 @@ def test_no_rotating_message_repeats_a_number_shown_beside_it() -> None:
     assert "sources_completed" not in joined, "a message restates the source counter"
     assert "sources_total" not in joined
     assert "current_source" not in joined, "the heading already names it"
+
+
+def test_a_facebook_test_lands_back_on_the_card_that_started_it(tmp_path: Path) -> None:
+    """The result is written to the connector card, so that is where the
+    person has to end up. Sending them to the dashboard instead is what made
+    a finished test look like a test that never reported."""
+    settings = app_settings(tmp_path)
+    application = create_app(settings=settings, sources=[], enable_scheduler=False)
+
+    with TestClient(application) as client:
+        client.post(
+            "/alerts/apify/token",
+            data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
+            follow_redirects=False,
+        )
+        started = client.post("/alerts/apify/test", follow_redirects=False)
+
+    assert started.status_code == 303
+    destination = started.headers["location"]
+    assert destination.startswith("/alerts"), "not the dashboard"
+    assert "open=facebook" in destination, "with the card already open"
+
+
+def test_connector_status_json_says_whether_a_check_has_settled(tmp_path: Path) -> None:
+    """The page polls this to replace Testing with what actually happened."""
+    settings = app_settings(tmp_path)
+    application = create_app(settings=settings, sources=[], enable_scheduler=False)
+
+    with TestClient(application) as client:
+        repository = application.state.repository
+        repository.set_connector_state(
+            "apify", "checking", message="Running one bounded Facebook check.", attempted=True
+        )
+        mid = client.get("/alerts/connectors.json").json()["apify"]
+        assert mid["settled"] is False
+        assert "Checking now" in mid["next_step"]
+
+        repository.set_connector_state(
+            "apify",
+            "working",
+            message="Facebook Marketplace returned 7 listing(s).",
+            observed_items=7,
+            attempted=True,
+            succeeded=True,
+        )
+        done = client.get("/alerts/connectors.json").json()["apify"]
+
+    assert done["settled"] is True
+    assert done["label"] == "Working"
+    assert done["observed_items"] == 7
+    assert "returned 7" in done["message"], "what the check found"
+    assert "Nothing more to do" in done["next_step"], "and where that leaves you"
+
+
+def test_a_group_with_no_token_is_told_what_is_missing(tmp_path: Path) -> None:
+    settings = app_settings(tmp_path)
+    application = create_app(settings=settings, sources=[], enable_scheduler=False)
+
+    with TestClient(application) as client:
+        client.post(
+            "/alerts/facebook-groups",
+            data={"group_url": "https://www.facebook.com/groups/1105487206638421/"},
+            follow_redirects=False,
+        )
+        page = client.get("/alerts?open=facebook&open_groups=1")
+
+    assert "Add the Apify token above before these groups can be checked." in page.text

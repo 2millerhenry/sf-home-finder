@@ -22,7 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from zoneinfo import ZoneInfo
 
 import yaml
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -1920,7 +1920,13 @@ def create_app(
 
     @application.get("/alerts", response_class=HTMLResponse)
     @one_connection
-    def alerts_page(request: Request, message: str = "", error: str = ""):
+    def alerts_page(
+        request: Request,
+        message: str = "",
+        error: str = "",
+        open_card: str = Query("", alias="open"),
+        open_groups: str = "",
+    ):
         preferences = load_preferences(active_settings.preferences_path)
         if not preferences.profile_active:
             return RedirectResponse(
@@ -2030,6 +2036,10 @@ def create_app(
                 "quiet_sources": quiet_sources,
                 "no_setup_count_word": spelled_count(len(no_setup_sources)),
                 "apify_state": connector_states.get("apify"),
+                # An action that redirects back here should leave the card it
+                # came from open, or the result it wrote is two clicks out of sight.
+                "open_facebook": open_card == "facebook",
+                "open_facebook_groups": bool(open_groups),
                 "furnished_finder_state": connector_states.get("furnished_finder"),
                 "bridge_version": FURNISHED_FINDER_BRIDGE_VERSION,
                 "facebook_searches": _prepared_facebook_searches(preferences),
@@ -2155,7 +2165,7 @@ def create_app(
         if not scanner.start_scan("connector_test"):
             return RedirectResponse("/?message=Scan+already+running", status_code=303)
         return RedirectResponse(
-            "/?message=Facebook+connector+test+started%3B+this+page+will+refresh+when+it+finishes",
+            "/alerts?open=facebook&message=Checking+Facebook+now%3B+the+result+appears+on+this+card+when+it+lands#facebook",
             status_code=303,
         )
 
@@ -2171,7 +2181,7 @@ def create_app(
         if not scanner.start_scan("facebook_backfill", sources=[source]):
             return RedirectResponse("/?message=Scan+already+running", status_code=303)
         return RedirectResponse(
-            "/?message=Facebook+backfill+started%3B+checking+up+to+40+recent+SF+cards",
+            "/alerts?open=facebook&message=Facebook+backfill+started%3B+checking+up+to+40+recent+SF+cards#facebook",
             status_code=303,
         )
 
@@ -2181,11 +2191,11 @@ def create_app(
             return RedirectResponse("/alerts?error=Connect+Apify+first", status_code=303)
         source = FacebookGroupsSource(apify_tokens)
         if not source._group_urls(load_preferences(active_settings.preferences_path)):
-            return RedirectResponse("/alerts?error=Add+a+public+Facebook+group+first", status_code=303)
+            return RedirectResponse("/alerts?open=facebook&open_groups=1&error=Add+a+public+group+below+first%2C+then+run+the+group+test#facebook", status_code=303)
         if not scanner.start_scan("facebook_groups_test", sources=[source]):
             return RedirectResponse("/?message=Scan+already+running", status_code=303)
         return RedirectResponse(
-            "/?message=Facebook+Groups+check+started%3B+checking+up+to+five+newest+posts",
+            "/alerts?open=facebook&open_groups=1&message=Checking+your+public+groups+now%3B+the+result+appears+on+this+card+when+it+lands#facebook",
             status_code=303,
         )
 
@@ -2211,7 +2221,7 @@ def create_app(
         existing = FacebookGroupsSource._group_urls(current)
         if normalized not in existing and len(existing) >= 10:
             return RedirectResponse(
-                "/alerts?error=The+public-group+limit+is+10%3B+remove+one+before+adding+another",
+                "/alerts?open=facebook&open_groups=1&error=The+public-group+limit+is+10%3B+remove+one+before+adding+another#facebook",
                 status_code=303,
             )
         sources_config["facebook_group_urls"] = list(dict.fromkeys([*existing, normalized]))
@@ -2220,7 +2230,7 @@ def create_app(
             yaml.safe_dump(document, sort_keys=False, allow_unicode=True, width=100_000),
         )
         return RedirectResponse(
-            "/alerts?message=Public+Facebook+group+saved%3B+run+the+bounded+group+test+when+ready",
+            "/alerts?open=facebook&open_groups=1&message=Group+added.+Run+the+group+test+below+to+check+it#facebook",
             status_code=303,
         )
 
@@ -2239,7 +2249,7 @@ def create_app(
             active_settings.preferences_path,
             yaml.safe_dump(document, sort_keys=False, allow_unicode=True, width=100_000),
         )
-        return RedirectResponse("/alerts?message=Public+Facebook+group+removed", status_code=303)
+        return RedirectResponse("/alerts?open=facebook&open_groups=1&message=Group+removed#facebook", status_code=303)
 
     @application.post("/alerts/apify/furnished-finder/test")
     def test_furnished_finder():
@@ -2661,6 +2671,30 @@ def create_app(
                 # GitHub was slow.
                 "update": update_state.as_dict() if (update_state := read_update_status(active_settings.data_dir)) else None,
                 "last_scan": scans[0] if scans else None,
+            }
+        )
+
+    @application.get("/alerts/connectors.json")
+    def connector_status_json():
+        """Let the alerts page finish the story a test started.
+
+        A connector test runs in the background scan, so the page that
+        started it was rendered before there was anything to report. This
+        is what it polls to replace "Testing" with what actually happened.
+        """
+        return JSONResponse(
+            {
+                key: {
+                    "state": status.state,
+                    "label": status.label,
+                    "message": status.message,
+                    "next_step": status.next_step,
+                    "settled": status.state != "checking",
+                    "observed_items": status.observed_items,
+                    "last_attempt_at": status.last_attempt_at,
+                    "last_success_at": status.last_success_at,
+                }
+                for key, status in repository.connector_states().items()
             }
         )
 

@@ -366,13 +366,34 @@
   <h2 id="extras-title">Two more, only if you want them</h2>
   <p class="extras-lede">Neither is needed. The {{ no_setup_count_word|lower }} free sources keep running whether you set these up or not.</p>
 
-  <details class="extra">
+  <details class="extra" id="facebook" data-connector-card="apify"{% if open_facebook %} open{% endif %}>
     <summary>
       <span>{{ source_chip('Facebook Marketplace') }}<small>Free to start &middot; about 10 minutes</small></span>
-      <span class="connector-state {{ apify_state.state if apify_state else 'not_configured' }}">{{ apify_state.label if apify_state else 'Optional' }}</span>
+      <span class="connector-state {{ apify_state.state if apify_state else 'not_configured' }}" data-connector-badge="apify">{{ apify_state.label if apify_state else 'Optional' }}</span>
     </summary>
     <p class="extra-why">Facebook lets no app read Marketplace directly, so this goes through Apify, a service that does the reading and hands back the results. <strong>Your Facebook login is never used or stored.</strong></p>
-    {% if apify_state and apify_state.message %}<p class="connector-message">{{ apify_state.message }}</p>{% endif %}
+    <p class="connector-message" data-connector-message="apify"{% if not (apify_state and apify_state.message) %} hidden{% endif %}>{{ apify_state.message if apify_state else '' }}</p>
+    {% if apify_configured %}
+      <p class="connector-next-step" data-connector-next-step="apify">{{ apify_state.next_step if apify_state else 'Saved, but nothing has been checked yet. Run the test on this card.' }}</p>
+      {% if apify_state and apify_state.last_attempt_at %}
+        <p class="connector-when" data-connector-when="apify">Last checked {{ apify_state.last_attempt_at | pacific_datetime }}{% if apify_state.observed_items %} &middot; {{ apify_state.observed_items }} listing{{ '' if apify_state.observed_items == 1 else 's' }} imported so far{% endif %}</p>
+      {% else %}
+        <p class="connector-when" data-connector-when="apify" hidden></p>
+      {% endif %}
+      <div class="connect-actions">
+        <form method="post" action="/alerts/apify/test"><button type="submit">Test Facebook connection</button></form>
+      </div>
+      <details class="nested-detail">
+        <summary>How this was set up</summary>
+    <ol class="extra-steps">
+        <li>Make a free account at <a href="https://console.apify.com/sign-up" target="_blank" rel="noopener noreferrer">console.apify.com</a>. No card is asked for.</li>
+        <li>In the Apify console, open <strong>Settings</strong> &rsaquo; <strong>API &amp; Integrations</strong>.</li>
+        <li>Copy your <strong>Personal API token</strong>. It begins with <code>apify_api_</code>.</li>
+        <li>Paste it below and save. It is written to a private file on this Mac and sent nowhere else.</li>
+      </ol>
+      <p class="extra-cost">Apify includes a small monthly credit, and this app is built to stay inside it: at most <strong>60 runs</strong> and <strong>300 group posts</strong> a month, counted here and stopped on reaching them, so it cannot quietly run up a bill.</p>
+      </details>
+    {% else %}
     <ol class="extra-steps">
       <li>Make a free account at <a href="https://console.apify.com/sign-up" target="_blank" rel="noopener noreferrer">console.apify.com</a>. No card is asked for.</li>
       <li>In the Apify console, open <strong>Settings</strong> &rsaquo; <strong>API &amp; Integrations</strong>.</li>
@@ -380,11 +401,8 @@
       <li>Paste it below and save. It is written to a private file on this Mac and sent nowhere else.</li>
     </ol>
     <p class="extra-cost">Apify includes a small monthly credit, and this app is built to stay inside it: at most <strong>60 runs</strong> and <strong>300 group posts</strong> a month, counted here and stopped on reaching them, so it cannot quietly run up a bill.</p>
+    {% endif %}
     {% if apify_configured %}
-      <p class="connection-good">Saved. It is called Working only after a real bounded check succeeds.</p>
-      <div class="connect-actions">
-        <form method="post" action="/alerts/apify/test"><button type="submit">Test Facebook connection</button></form>
-      </div>
       <form class="upload-form" method="post" action="/alerts/apify/token">
         <label>Replace the token <input type="password" name="apify_token" autocomplete="off" placeholder="apify_api_…" required></label>
         <button type="submit">Save replacement</button>
@@ -395,15 +413,21 @@
         <button type="submit">Save token locally</button>
       </form>
     {% endif %}
-    <details class="nested-detail">
-      <summary>Also watch public Facebook groups</summary>
+    <details class="nested-detail"{% if open_facebook_groups %} open{% endif %}>
+      <summary>Also watch public Facebook groups{% if facebook_groups %} <small>({{ facebook_groups|length }} added)</small>{% endif %}</summary>
       <p>Public housing-offer posts only. Private groups, Messenger, WhatsApp, wanted ads and posts outside SF are all left out.</p>
       {% if facebook_groups %}<ul class="saved-source-list">{% for group in facebook_groups %}<li><a href="{{ group.url }}" target="_blank" rel="noopener noreferrer">{{ group.name }}</a><form method="post" action="/alerts/facebook-groups/remove"><input type="hidden" name="group_url" value="{{ group.url }}"><button type="submit">Remove</button></form></li>{% endfor %}</ul>{% endif %}
       <form class="upload-form" method="post" action="/alerts/facebook-groups">
         <label>Public Facebook group URL <input type="url" name="group_url" placeholder="https://www.facebook.com/groups/…/" required></label>
         <button type="submit">Add public group</button>
       </form>
-      {% if apify_configured and facebook_groups %}<form method="post" action="/alerts/apify/groups/test"><button type="submit">Test public groups</button></form>{% endif %}
+      {% if apify_configured and facebook_groups %}
+        <form method="post" action="/alerts/apify/groups/test"><button type="submit">Test public groups</button></form>
+      {% elif facebook_groups %}
+        <p class="connector-when">Add the Apify token above before these groups can be checked.</p>
+      {% else %}
+        <p class="connector-when">Add a group above, then a button appears here to check it.</p>
+      {% endif %}
     </details>
   </details>
 
@@ -430,4 +454,5 @@
     </div>
   </details>
 </section>
+<script src="{{ url_for('static', path='/connector-status.js') }}?v={{ asset_version() }}" defer></script>
 {% endblock %}

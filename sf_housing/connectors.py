@@ -52,6 +52,27 @@ class ConnectorStatus:
         return self.state in {"working", "working_zero", "waiting_first_alert"}
 
     @property
+    def next_step(self) -> str:
+        """What the person should do about this connector, in their words.
+
+        The message field records what the last check found. This records
+        where that leaves them, which is the question a status badge alone
+        never answers.
+        """
+        return {
+            "not_configured": "Not set up yet. Follow the steps on this card to start.",
+            "configured_unverified": "Saved, but nothing has been checked yet. Run the test on this card.",
+            "checking": "Checking now. This usually takes under a minute, and the result appears here on its own.",
+            "working": "Working. Nothing more to do.",
+            "working_zero": "Working. The check reached the source and found nothing matching your deal, which is an answer rather than a failure.",
+            "waiting_first_alert": "Connected. Waiting for the first alert to arrive.",
+            "degraded": "The last check did not finish. Run it again; if it keeps failing, the line above says why.",
+            "authorization_expired": "The connection is no longer accepted. Set it up again on this card.",
+            "quota_blocked": "This month's allowance is used up. It resets at the start of next month.",
+            "disabled": "Turned off.",
+        }[self.state]
+
+    @property
     def label(self) -> str:
         return {
             "not_configured": "Optional",
