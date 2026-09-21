@@ -10,6 +10,15 @@ about. Free forever. No ads. Runs entirely on your laptop.
 
 <img alt="Dragging the match slider from 50 up to 88: the count falls from every possible home to the three excellent ones, and the shortlist behind it re-ranks as it goes, each row showing its score, rent, neighborhood and source" src="docs/screenshots/launch.gif">
 
+<p align="center">
+  <a href="#install-it">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/art/arrows-down-dark.svg">
+      <img alt="Arrows pointing down at the install command just below" src="docs/art/arrows-down-light.svg" width="460">
+    </picture>
+  </a>
+</p>
+
 ## Install it
 
 Open **Terminal** — press `Cmd` + `Space`, type `Terminal`, press Return — then paste this and
@@ -68,6 +77,15 @@ No admin rights, no Python and no terminal. The first install downloads a privat
 Python that belongs only to this app, which is most of the few minutes.
 
 </details>
+
+<p align="center">
+  <a href="#install-it">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/art/arrows-up-dark.svg">
+      <img alt="Arrows pointing back up at the install command just above" src="docs/art/arrows-up-light.svg" width="460">
+    </picture>
+  </a>
+</p>
 
 ### Opening it later
 
