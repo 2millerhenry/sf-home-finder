@@ -14,7 +14,7 @@ about. Free forever. No ads. Runs entirely on your laptop.
   <a href="#install-it">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/art/arrows-down-dark.svg">
-      <img alt="Arrows pointing down at the install command just below" src="docs/art/arrows-down-light.svg" width="460">
+      <img alt="Arrows pointing down at the install command just below" src="docs/art/arrows-down-light.svg" width="100%">
     </picture>
   </a>
 </p>
@@ -82,7 +82,7 @@ Python that belongs only to this app, which is most of the few minutes.
   <a href="#install-it">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/art/arrows-up-dark.svg">
-      <img alt="Arrows pointing back up at the install command just above" src="docs/art/arrows-up-light.svg" width="460">
+      <img alt="Arrows pointing back up at the install command just above" src="docs/art/arrows-up-light.svg" width="100%">
     </picture>
   </a>
 </p>
