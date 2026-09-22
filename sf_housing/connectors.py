@@ -74,6 +74,15 @@ class ConnectorStatus:
         }[self.state]
 
     @property
+    def needs_action(self) -> bool:
+        """Whether the next step asks the reader to do something.
+
+        A working connector's next step only restates its result, and two
+        lines saying the same thing read as a page unsure of its own answer.
+        """
+        return self.state not in {"working", "working_zero", "waiting_first_alert", "checking"}
+
+    @property
     def label(self) -> str:
         return {
             "not_configured": "Optional",

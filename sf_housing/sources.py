@@ -4882,7 +4882,13 @@ class ApifyFacebookMarketplaceSource:
     connector_key = "apify"
     scheduled_only = True
     manual_scan_enabled = True
-    results_limit = 5
+    # Measured on this actor: about $0.013 of Apify credit per listing read
+    # with details. Apify's free tier is $5 a month, so a twice-daily scan can
+    # afford roughly six listings a run and nothing like a full board. Ten was
+    # not an arbitrary smallness; it was the free tier. Raising the ceiling is
+    # a spending decision, so it lives in preferences rather than in a default.
+    results_limit = 10
+    max_results_per_scan = 250
     monthly_run_limit = 60
     request_timeout_seconds = 75.0
     actor_url = "https://api.apify.com/v2/acts/apify~facebook-marketplace-scraper/run-sync-get-dataset-items"
@@ -4928,6 +4934,30 @@ class ApifyFacebookMarketplaceSource:
             "https://www.facebook.com/marketplace/114952118516947/propertyrentals/?"
             + urlencode(query)
         )
+
+    @classmethod
+    def _start_urls(cls, preferences: Preferences) -> list[str]:
+        """Every feed a rental actually appears in, read in one run.
+
+        The city Property Rentals feed is where whole units are published, and
+        it is the only one this asked for. Rooms and sublets are posted as
+        ordinary Marketplace items and never reach that feed, so the board was
+        missing a whole category rather than merely being short.
+        """
+        urls = [cls._marketplace_url(preferences)]
+        paths = set(getattr(preferences.deal_profile, "enabled_paths", ()) or ())
+        keywords: list[str] = []
+        if "private_room" in paths:
+            keywords.append("room for rent San Francisco")
+        if paths.intersection({"studio", "one_bedroom", "two_bedroom", "three_bedroom"}):
+            keywords.append("apartment for rent San Francisco")
+        keywords.append("sublet San Francisco")
+        for keyword in keywords:
+            urls.append(
+                "https://www.facebook.com/marketplace/114952118516947/search/?"
+                + urlencode({"query": keyword, "sortBy": "creation_time_descend"})
+            )
+        return urls
 
     @staticmethod
     def _flatten(value, limit: int = 420) -> str:
@@ -5033,15 +5063,21 @@ class ApifyFacebookMarketplaceSource:
         """Normalize a completed actor dataset without issuing another actor run."""
         listings: list[ListingCandidate] = []
         actor_errors = 0
+        # Where the rows went. A run that asks for 150 and shows 108 is either
+        # over-filtering or under-fetching, and only a breakdown says which.
+        dropped = {"malformed": 0, "sold": 0, "ended": 0, "unusable": 0, "outside_sf": 0}
         for item in rows:
             if not isinstance(item, dict):
+                dropped["malformed"] += 1
                 continue
             if item.get("error") or item.get("errorDescription"):
                 actor_errors += 1
                 continue
             if item.get("is_sold") is True or item.get("isSold") is True:
+                dropped["sold"] += 1
                 continue
             if item.get("is_live") is False or item.get("isLive") is False:
+                dropped["ended"] += 1
                 continue
             original_url = self._direct_item_url(item)
             title = _clean_text(
@@ -5055,6 +5091,7 @@ class ApifyFacebookMarketplaceSource:
                 180,
             )
             if not original_url or not title:
+                dropped["unusable"] += 1
                 continue
             description = self._flatten(item.get("description"), 1_200)
             location = self._location_text(item)
@@ -5063,6 +5100,7 @@ class ApifyFacebookMarketplaceSource:
                 # The Facebook category's radius is advisory, not a guaranteed
                 # boundary. Do not clutter the local archive with Daly City,
                 # Richmond, Oakland, or San Rafael cards.
+                dropped["outside_sf"] += 1
                 continue
             context = " ".join(part for part in (location, title, description, detail_text) if part)
             coordinate_neighborhood = facebook_coordinate_neighborhood(location)
@@ -5088,6 +5126,13 @@ class ApifyFacebookMarketplaceSource:
                     },
                 )
             )
+        LOGGER.info(
+            "Facebook Marketplace: %s rows in, %s kept, dropped %s, actor errors %s",
+            len(rows),
+            len(listings),
+            ", ".join(f"{name} {count}" for name, count in dropped.items() if count) or "none",
+            actor_errors,
+        )
         if not listings:
             detail = f" ({actor_errors} actor error row(s))" if actor_errors else ""
             raise SourceError(f"The Facebook helper returned no parseable active San Francisco listing links{detail}.")
@@ -5102,18 +5147,21 @@ class ApifyFacebookMarketplaceSource:
                 "The local 60-run monthly Facebook safety cap was reached (or its usage file is invalid)."
             )
         self.search_url = self._marketplace_url(preferences)
+        start_urls = self._start_urls(preferences)
         whole_unit = preferences.section("whole_unit")
         results_limit = self.results_limit
         if whole_unit.get("enabled", True) is True:
             try:
                 results_limit = int(
-                    preferences.section("sources").get("facebook_marketplace_results_per_scan", 10)
+                    preferences.section("sources").get(
+                        "facebook_marketplace_results_per_scan", self.results_limit
+                    )
                 )
             except (TypeError, ValueError) as exc:
                 raise SourceError("The Facebook result limit must be a whole number.") from exc
-            results_limit = max(self.results_limit, min(results_limit, 10))
+            results_limit = max(self.results_limit, min(results_limit, self.max_results_per_scan))
         payload = {
-            "startUrls": [{"url": self.search_url}],
+            "startUrls": [{"url": url} for url in start_urls],
             # Ten newest detailed rental cards twice a day cover all housing
             # workflows while keeping this personal monitor deliberately small.
             "resultsLimit": results_limit,
@@ -5223,11 +5271,15 @@ class FacebookGroupsSource:
     platform = "Facebook Groups"
     provider = "apify"
     connector_key = "apify"
+    # Its own row: writing group results into the Marketplace connector made a
+    # group test overwrite the Marketplace answer and report nothing of its own.
+    connector_state_key = "facebook_groups"
     detail_budget = 0
     scheduled_only = True
     manual_scan_enabled = True
-    results_limit = 5
-    manual_results_limit = 20
+    # About $0.014 of credit per post, on the same $5 monthly free tier.
+    results_limit = 10
+    manual_results_limit = 30
     monthly_post_limit = 400
     request_timeout_seconds = 75.0
     actor_url = "https://api.apify.com/v2/acts/apify~facebook-groups-scraper/run-sync-get-dataset-items"
@@ -5361,7 +5413,9 @@ class FacebookGroupsSource:
             "startUrls": [{"url": url} for url in group_urls],
             "resultsLimit": results_limit,
             "viewOption": "CHRONOLOGICAL",
-            "onlyPostsNewerThan": "14 days",
+            # A month, because a room posted three weeks ago is still worth
+            # seeing and a fortnight was throwing away half the board.
+            "onlyPostsNewerThan": "30 days",
         }
         try:
             response = client.post(

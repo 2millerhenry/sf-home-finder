@@ -613,7 +613,7 @@ def test_no_source_mark_reaches_outside_this_computer() -> None:
     import re
 
     page = pathlib.Path("sf_housing/templates/alerts.html").read_text(encoding="utf-8")
-    chip = re.search(r'<span class="source-chip">.*?</span>\s*\{% endmacro %\}', page, re.S).group(0)
+    chip = re.search(r'<span class="source-chip"[^>]*>.*?\{% endmacro %\}', page, re.S).group(0)
 
     assert "http://" not in chip and "https://" not in chip, chip
     assert "//" not in chip.replace("https://", "").replace("http://", ""), chip
@@ -750,7 +750,10 @@ def test_both_optional_connectors_say_what_they_cost() -> None:
     inside the free monthly credit, and the numbers are in the code."""
     page = alerts_markup()
 
-    assert "60 runs" in page and "300 group posts" in page, "state the real caps"
+    # The real caps, which are what the code enforces: monthly_run_limit is 60
+    # and monthly_post_limit is 400. The page said 300 while the code allowed
+    # 400, so "the numbers are in the code" was only half true.
+    assert "60 checks" in page and "400 group posts" in page, "state the real caps"
     assert "paid Apify account" not in page, "it was never true"
     assert "No card is asked for" in page
 

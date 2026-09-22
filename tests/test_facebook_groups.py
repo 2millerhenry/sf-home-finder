@@ -79,9 +79,11 @@ def test_public_facebook_group_posts_become_deduplicable_housing_candidates(tmp_
     assert request["headers"] == {"Authorization": f"Bearer {VALID_TOKEN}"}
     assert request["json"] == {
         "startUrls": [{"url": GROUP_URL}],
-        "resultsLimit": 5,
+        "resultsLimit": 10,
         "viewOption": "CHRONOLOGICAL",
-        "onlyPostsNewerThan": "14 days",
+        # A month: a room posted three weeks ago is still worth seeing, and a
+        # fortnight was discarding half the board.
+        "onlyPostsNewerThan": "30 days",
     }
 
 
@@ -93,7 +95,7 @@ def test_manual_group_scan_reads_deeper_than_scheduled_scan(tmp_path, preference
 
     source.search_for_trigger(client, group_preferences(preferences), "manual")
 
-    assert client.call[1]["json"]["resultsLimit"] == 20
+    assert client.call[1]["json"]["resultsLimit"] == 30
 
 
 def test_group_parser_keeps_sf_offers_and_rejects_seekers_and_outside_cities(

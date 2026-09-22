@@ -59,17 +59,18 @@ def test_apify_facebook_result_is_normalized_without_exposing_token(tmp_path, pr
     url, request = client.call
     assert VALID_TOKEN not in url
     assert request["headers"] == {"Authorization": f"Bearer {VALID_TOKEN}"}
+    # The default stays inside Apify's $5 free tier; preferences raise it.
     assert request["json"]["resultsLimit"] == 10
+    starts = [entry["url"] for entry in request["json"]["startUrls"]]
+    assert any("propertyrentals" in url for url in starts), "whole units"
+    assert any("sublet" in url for url in starts), "and sublets, which never reach that feed"
     assert request["json"]["includeListingDetails"] is True
     assert request["timeout"] == 75.0
-    assert request["json"]["startUrls"] == [
-        {
-            "url": (
-                "https://www.facebook.com/marketplace/114952118516947/propertyrentals/"
-                "?sortBy=creation_time_descend&radius=10&exact=false&minPrice=950&maxPrice=7875"
-            )
-        }
-    ]
+    # The rentals feed still leads and still carries the deal's price band.
+    assert starts[0] == (
+        "https://www.facebook.com/marketplace/114952118516947/propertyrentals/"
+        "?sortBy=creation_time_descend&radius=10&exact=false&minPrice=950&maxPrice=7875"
+    )
 
 
 def test_apify_token_is_saved_private(tmp_path) -> None:

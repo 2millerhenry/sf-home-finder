@@ -761,7 +761,7 @@ def test_apify_token_can_be_connected_from_alerts(tmp_path: Path) -> None:
         "saving the token starts the check itself, and the card has to say so"
     )
     assert 'name="apify_token"' in page.text
-    assert "Replace the token" in page.text, "and offers a way to change it"
+    assert "Replace token" in page.text, "and offers a way to change it"
 
 
 def test_plain_language_deal_form_updates_profile_and_preserves_advanced_settings(tmp_path: Path) -> None:
@@ -1945,7 +1945,7 @@ def test_a_group_with_no_token_is_told_what_is_missing(tmp_path: Path) -> None:
         )
         page = client.get("/alerts?open=facebook&open_groups=1")
 
-    assert "Add the Apify token above before these groups can be checked." in page.text
+    assert "Connect Apify above before these groups can be checked." in page.text
 
 
 def test_saving_a_token_starts_the_check_without_a_second_click(tmp_path: Path) -> None:
@@ -2058,3 +2058,40 @@ def test_the_facebook_check_scans_facebook_and_not_the_whole_board(tmp_path: Pat
         assert platforms == ["Facebook Marketplace"], (
             f"a bounded Facebook check must ask for Facebook alone; asked for {platforms}"
         )
+
+
+def test_a_second_press_does_not_overwrite_a_check_already_running(tmp_path: Path) -> None:
+    """Pressing twice used to write "a scan was already running" over a check
+    that was genuinely in flight, reporting a dead end for work about to
+    succeed -- and hiding the answer the first press was already fetching."""
+    settings = app_settings(tmp_path)
+    started, release = threading.Event(), threading.Event()
+    application = create_app(
+        settings=settings,
+        sources=[WaitingDashboardSource(started, release)],
+        enable_scheduler=False,
+    )
+    repository = application.state.repository
+
+    with TestClient(application) as client:
+        with scan_requests(application):
+            client.post(
+                "/alerts/apify/token",
+                data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
+                follow_redirects=False,
+            )
+        # A check of our own is in flight...
+        repository.set_connector_state(
+            "apify", "checking", message="Running one bounded Facebook check.", attempted=True
+        )
+        client.post("/scan", follow_redirects=False)
+        assert started.wait(timeout=2)
+        # ...and an impatient second press must leave it alone.
+        client.post("/alerts/apify/test", follow_redirects=False)
+        state = repository.connector_state("apify")
+        release.set()
+
+    assert state is not None and state.state == "checking", (
+        "a running check must survive an impatient second press"
+    )
+    assert "Running one bounded Facebook check." in state.message

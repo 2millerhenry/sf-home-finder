@@ -2040,6 +2040,7 @@ def create_app(
                 "quiet_sources": quiet_sources,
                 "no_setup_count_word": spelled_count(len(no_setup_sources)),
                 "apify_state": connector_states.get("apify"),
+                "facebook_groups_state": connector_states.get("facebook_groups"),
                 # An action that redirects back here should leave the card it
                 # came from open, or the result it wrote is two clicks out of sight.
                 "open_facebook": open_card == "facebook",
@@ -2142,21 +2143,36 @@ def create_app(
     def support_report_json(request: Request):
         return JSONResponse(support_report(request).to_dict())
 
-    def _start_facebook_check(trigger: str) -> bool:
-        """Check Facebook, and only Facebook.
+    def _start_facebook_check(trigger: str) -> str:
+        """Check Facebook, and only Facebook. Returns what happened.
 
         This used to run the whole source set. Every scan shares one time
         budget, so Facebook queued behind eighteen other sites and was
         regularly cut for time -- the card reported "Not checked this time"
-        for the one source the button exists to check, which is worse than
-        no button at all.
+        for the one source the button exists to check.
 
         Mark the check before starting it, never after: the scan runs in a
         daemon thread and can finish before this function returns, and a mark
-        written afterwards overwrites the result the scan just recorded,
-        stranding the card on Testing until the next scheduled run.
+        written afterwards overwrites the result the scan just recorded.
+
+        Say nothing at all when a scan is already going. Writing a refusal
+        over a check that is genuinely running reports a dead end for work
+        that is about to succeed, which is how a second press could hide the
+        answer the first one was already fetching.
         """
-        previous = repository.connector_state("apify")
+        if scanner.is_running:
+            current = repository.connector_state("apify")
+            if current is None or current.state != "checking":
+                # Somebody else's scan holds the lock. Record that the token is
+                # saved and unverified -- but never over a check of our own that
+                # is genuinely running and about to report.
+                repository.set_connector_state(
+                    "apify",
+                    "configured_unverified",
+                    message="A scan was already running, so this check has not started yet.",
+                    configured=True,
+                )
+            return "busy"
         repository.set_connector_state(
             "apify",
             "checking",
@@ -2165,10 +2181,11 @@ def create_app(
             attempted=True,
         )
         if scanner.start_scan(trigger, sources=[FacebookMarketplaceSource(mailbox, apify_tokens)]):
-            return True
-        # A check that is not running must not be left claiming that it is.
-        # The token is saved by the time this runs, so "not configured" is no
-        # longer true, and "checking" is what is being undone.
+            return "started"
+        # Lost a race for the scan lock: undo the mark, since no check is
+        # running to replace it. The token is saved by now, so "not
+        # configured" is no longer true and "checking" is what is being undone.
+        previous = repository.connector_state("apify")
         stale = {"checking", "not_configured"}
         repository.set_connector_state(
             "apify",
@@ -2176,7 +2193,7 @@ def create_app(
             message="A scan was already running, so this check did not start.",
             configured=True,
         )
-        return False
+        return "busy"
 
     @application.post("/alerts/apify/token")
     def save_apify_token(apify_token: str = Form(...)):
@@ -2189,13 +2206,13 @@ def create_app(
         # Saving a token is not a thing anybody wants for its own sake; they
         # want Facebook homes. Start the bounded check here rather than making
         # the token a first step that silently waits for a second one.
-        if _start_facebook_check("connector_test"):
+        if _start_facebook_check("connector_test") == "started":
             return RedirectResponse(
                 "/alerts?open=facebook&message=Token+saved+and+checking+Facebook+now#facebook",
                 status_code=303,
             )
         return RedirectResponse(
-            "/alerts?open=facebook&message=Token+saved.+A+scan+is+already+running%3B+run+the+test+when+it+finishes#facebook",
+            "/alerts?open=facebook&message=Token+saved.+A+check+is+already+running%3B+its+result+lands+here#facebook",
             status_code=303,
         )
 
@@ -2203,9 +2220,9 @@ def create_app(
     def test_apify_connector():
         if not apify_tokens.is_configured:
             return RedirectResponse("/alerts?error=Connect+Apify+first", status_code=303)
-        if not _start_facebook_check("connector_test"):
+        if _start_facebook_check("connector_test") != "started":
             return RedirectResponse(
-                "/alerts?open=facebook&message=A+scan+is+already+running%3B+Facebook+is+part+of+it+and+this+card+will+update#facebook",
+                "/alerts?open=facebook&message=A+check+is+already+running.+Its+result+lands+on+this+card+on+its+own#facebook",
                 status_code=303,
             )
         return RedirectResponse(
@@ -2224,7 +2241,7 @@ def create_app(
         source.apify.results_limit = 40
         if not scanner.start_scan("facebook_backfill", sources=[source]):
             return RedirectResponse(
-                "/alerts?open=facebook&message=A+scan+is+already+running%3B+Facebook+is+part+of+it+and+this+card+will+update#facebook",
+                "/alerts?open=facebook&message=A+check+is+already+running.+Its+result+lands+on+this+card+on+its+own#facebook",
                 status_code=303,
             )
         return RedirectResponse(
@@ -2239,9 +2256,16 @@ def create_app(
         source = FacebookGroupsSource(apify_tokens)
         if not source._group_urls(load_preferences(active_settings.preferences_path)):
             return RedirectResponse("/alerts?open=facebook&open_groups=1&error=Add+a+public+group+below+first%2C+then+run+the+group+test#facebook", status_code=303)
+        repository.set_connector_state(
+            "facebook_groups",
+            "checking",
+            message="Reading the newest posts in your public groups.",
+            configured=True,
+            attempted=True,
+        )
         if not scanner.start_scan("facebook_groups_test", sources=[source]):
             return RedirectResponse(
-                "/alerts?open=facebook&message=A+scan+is+already+running%3B+Facebook+is+part+of+it+and+this+card+will+update#facebook",
+                "/alerts?open=facebook&message=A+check+is+already+running.+Its+result+lands+on+this+card+on+its+own#facebook",
                 status_code=303,
             )
         return RedirectResponse(
@@ -2739,6 +2763,7 @@ def create_app(
                     "label": status.label,
                     "message": status.message,
                     "next_step": status.next_step,
+                    "needs_action": status.needs_action,
                     "settled": status.state != "checking",
                     "observed_items": status.observed_items,
                     "last_attempt_at": status.last_attempt_at,

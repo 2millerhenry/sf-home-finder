@@ -1654,7 +1654,6 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
    be read at a glance, and the logos are the thing being recognised. */
 .source-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 0.76rem; font-weight: 600; color: var(--ink); white-space: nowrap; }
 .source-chip[data-quiet] { opacity: 0.72; border-style: dashed; }
-.chip-quiet { margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--warn-surface, rgba(180,120,0,0.16)); color: var(--warn-ink, #8a5a00); font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
 .source-mark { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: oklch(var(--mark-light, 54%) 0.13 var(--mark-hue)); color: oklch(99% 0.004 var(--mark-hue)); font-size: 0.6rem; font-weight: 760; letter-spacing: -0.01em; }
 /* Every logo gets the same round tile, whatever it arrived as. Several of
    these are dark marks drawn on their own white square, and without an edge
@@ -1668,7 +1667,15 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
   background: var(--logo-tile);
   box-shadow: inset 0 0 0 1px var(--logo-edge);
 }
-.already-list, .connect-sources { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.connect-sources { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+/* Ragged wrapping left a lone chip stranded on a row of its own. Uniform
+   cells wrap into even rows, so a part-filled last row reads as a grid
+   rather than a mistake. */
+.already-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 6px; margin: 0 0 10px; }
+.already-list .source-chip { width: 100%; min-width: 0; overflow: hidden; }
+/* Clipping a name mid-word reads as a rendering fault; an ellipsis reads as
+   a name too long for its cell. */
+.source-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* One line under the button that already holds the spinner. It replaced a
    bordered panel with its own indeterminate bar, which was a second loading
    indicator for a single wait. The row is reserved so the sentences, which are
@@ -1780,6 +1787,62 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
 .extra > *:last-child { margin-bottom: 18px; }
 .extra p { max-width: 66ch; color: var(--muted); font-size: 0.83rem; line-height: 1.5; }
 .extra-steps { margin: 12px 18px 18px; padding-left: 20px; color: var(--muted); font-size: 0.82rem; line-height: 1.7; }
+/* ---- Connector card ----
+   One question per line, in one column, on one rhythm: what happened, when,
+   what to do, then the action. The earlier two-column try filled the width
+   by scattering four unrelated things down a narrow gutter. */
+/* The card spans the card; only the sentences inside it are held to a
+   reading measure. Capping the whole column was what left the right-hand
+   half of a wide card empty. */
+.conn { display: grid; gap: 10px; }
+.conn > p { max-width: 74ch; }
+.conn > * { margin: 0; }
+.conn-headline { color: var(--ink) !important; font-size: 0.95rem !important; font-weight: 640; line-height: 1.45 !important; }
+.conn-sub { color: var(--muted) !important; font-size: 0.8rem !important; line-height: 1.5 !important; }
+.conn-note { padding: 9px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface-muted); color: var(--ink) !important; font-size: 0.83rem !important; line-height: 1.5 !important; }
+
+/* Actions sit on one line and share a baseline, so the card has a single
+   place where things happen rather than a column of stray buttons. */
+.conn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 2px; }
+.conn-row form { display: contents; }
+.conn-token { display: flex !important; align-items: center; gap: 8px; }
+.conn-token input { width: 210px; min-height: 40px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 11px; background: var(--surface); color: var(--ink); font-size: 0.83rem; }
+.conn-row button { min-height: 40px; padding: 0 16px; border-radius: 10px; font-size: 0.83rem; font-weight: 640; }
+.conn-primary { border-color: var(--accent) !important; background: var(--accent) !important; color: var(--surface) !important; }
+
+/* Real progress from the scan itself: a share of the work done and the time
+   left, rather than an animation that only signals "something". */
+.conn-progress { display: grid; gap: 7px; }
+.conn-bar { height: 5px; border-radius: 999px; background: var(--surface-muted); overflow: hidden; }
+.conn-bar span { display: block; width: 0%; height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.4s ease; }
+.conn-progress-label { display: flex; justify-content: space-between; gap: 12px; color: var(--muted) !important; font-size: 0.78rem !important; }
+.conn-elapsed { font-variant-numeric: tabular-nums; }
+
+.conn-about { margin-top: 2px; }
+.conn-about > summary { min-height: 34px; display: inline-flex; align-items: center; cursor: pointer; color: var(--accent-hover); font-size: 0.79rem; font-weight: 650; }
+.conn-about p { max-width: 68ch; font-size: 0.82rem; line-height: 1.55; }
+.conn-about .extra-steps { margin: 10px 0; padding-left: 18px; }
+.conn-caps { margin-top: 10px !important; padding: 10px 13px; border-radius: 9px; background: var(--surface-muted); }
+
+/* Groups are a second subject, so they get a rule above them and the same
+   rhythm again rather than a nested fold that hides what you just added. */
+.conn-groups { margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.conn-groups > p { max-width: 74ch; }
+.conn-groups > * { margin: 0; }
+.conn-groups-title { margin: 0; display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 0.88rem; font-weight: 650; }
+.conn-groups-title span { padding: 1px 8px; border-radius: 999px; background: var(--surface-muted); color: var(--muted); font-size: 0.72rem; font-weight: 700; }
+.conn-group-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.conn-group-list { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.conn-group-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
+.conn-group-list a { color: var(--ink); font-size: 0.83rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-group-list form { margin: 0; }
+.conn-group-list button { min-height: 32px; padding: 0 12px; border-radius: 8px; font-size: 0.77rem; }
+
+@media (max-width: 560px) {
+  .conn-token { width: 100%; }
+  .conn-token input { width: 100%; }
+}
+
 .nested-detail { margin-top: 12px; }
 .nested-detail > summary { cursor: pointer; color: var(--accent-hover); font-size: 0.79rem; font-weight: 650; }
 

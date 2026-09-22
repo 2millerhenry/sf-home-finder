@@ -2947,7 +2947,7 @@ class Scanner:
                         else "waiting_first_alert"
                     )
                     state_message = (
-                        f"Imported {source_seen} {source.platform} listing(s) from a saved-search alert."
+                        f"Imported {source_seen} {source.platform} listing{'' if source_seen == 1 else 's'} from a saved-search alert."
                         if source_seen
                         else (
                             getattr(source, "empty_result_message", None)
@@ -2959,7 +2959,7 @@ class Scanner:
                 else:
                     state = "working" if observed > 0 else "working_zero"
                     state_message = (
-                        f"{source.platform} returned {source_seen} listing(s)."
+                        f"{source.platform} returned {source_seen} listing{'' if source_seen == 1 else 's'}."
                         if source_seen
                         else f"{source.platform} checked successfully with no matching listings."
                     )

@@ -1,4 +1,4 @@
-// A connector test runs inside the background scan, so the page that started
+// A connector check runs inside the background scan, so the page that started
 // it was rendered before there was anything to say. Without this, the badge
 // sits on "Testing" until the person reloads by hand -- which reads exactly
 // like a connector that silently failed.
@@ -22,36 +22,71 @@
     "authorization_expired", "quota_blocked", "disabled",
   ];
 
-  function setText(selector, key, text) {
-    var node = document.querySelector('[' + selector + '="' + key + '"]');
-    if (!node) return;
-    if (text) {
-      node.textContent = text;
-      node.hidden = false;
-    } else {
-      node.textContent = "";
-      node.hidden = true;
-    }
+  function node(attr, key) {
+    return document.querySelector("[" + attr + '="' + key + '"]');
   }
 
+  function setText(attr, key, text) {
+    var el = node(attr, key);
+    if (!el) return;
+    el.textContent = text || "";
+    el.hidden = !text;
+  }
+
+  function show(key, on) {
+    var el = node("data-connector-progress", key);
+    if (el) el.hidden = !on;
+  }
+
+  watched.forEach(function (key) { show(key, true); });
+
   function apply(key, status) {
-    var badge = document.querySelector('[data-connector-badge="' + key + '"]');
+    var badge = node("data-connector-badge", key);
     if (badge) {
       STATES.forEach(function (name) { badge.classList.remove(name); });
       badge.classList.add(status.state);
       badge.textContent = status.label;
     }
     setText("data-connector-message", key, status.message);
-    setText("data-connector-next-step", key, status.next_step);
+    // A working connector's next step only restates its result; two lines
+    // saying the same thing read as a page unsure of its own answer.
+    setText("data-connector-next-step", key, status.needs_action ? status.next_step : "");
     var when = "";
     if (status.last_attempt_at) {
       when = "Last checked just now";
-      if (status.observed_items) {
-        when += " · " + status.observed_items + " listing" +
-          (status.observed_items === 1 ? "" : "s") + " imported so far";
-      }
+      if (status.observed_items) when += " · " + status.observed_items + " imported in total";
     }
     setText("data-connector-when", key, when);
+  }
+
+  // Real progress, from the scan's own figures rather than an animation that
+  // only signals "something is happening".
+  function paint(progress) {
+    watched.forEach(function (key) {
+      var box = node("data-connector-progress", key);
+      if (!box) return;
+      var fill = box.querySelector("[data-progress-fill]");
+      var text = box.querySelector("[data-progress-text]");
+      var clock = box.querySelector("[data-progress-elapsed]");
+      var percent = Math.max(4, Math.min(100, Number(progress.percent) || 0));
+      if (fill) fill.style.width = percent + "%";
+      if (text) {
+        text.textContent = progress.current_source
+          ? "Reading " + progress.current_source + "…"
+          : "Checking Facebook…";
+      }
+      if (clock) {
+        var elapsed = Math.max(0, Math.round(Number(progress.elapsed_seconds) || 0));
+        clock.textContent = progress.remaining_label || (elapsed + "s");
+      }
+    });
+  }
+
+  function tick() {
+    fetch("/scan/status", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (p) { if (p) paint(p); })
+      .catch(function () {});
   }
 
   // Give up rather than poll a stalled scan forever; five minutes is well past
@@ -62,6 +97,7 @@
   // behind it, which is the failure this whole file exists to prevent.
   function giveUp() {
     watched.forEach(function (key) {
+      show(key, false);
       setText(
         "data-connector-next-step",
         key,
@@ -82,6 +118,7 @@
           var status = states[key];
           if (!status) return true;
           apply(key, status);
+          if (status.settled) show(key, false);
           return !status.settled;
         });
         if (!watched.length) return;
@@ -96,5 +133,10 @@
       });
   }
 
-  window.setTimeout(poll, 2000);
+  tick();
+  var ticker = window.setInterval(function () {
+    if (!watched.length) window.clearInterval(ticker);
+    else tick();
+  }, 1000);
+  window.setTimeout(poll, 1500);
 })();
