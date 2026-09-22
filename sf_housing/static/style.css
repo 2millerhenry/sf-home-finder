@@ -695,7 +695,10 @@ select.is-selected { background: var(--surface-muted); border-color: var(--line-
    it is the one that carries a colour you stop at. A flag rather than a cross:
    the home may well be real, and hiding it was never the answer. */
 .price-basis.is-under-market > summary { color: var(--red); }
-.price-basis.is-under-market > p { width: 236px; border-color: var(--red-line); }
+/* Wider than the other two notes because it is the only one with an
+   instruction in it, and the price column it hangs off is 96px. */
+.price-basis.is-under-market > p { width: 258px; border-color: var(--red-line); }
+.price-basis.is-under-market > summary { white-space: nowrap; }
 .price-basis > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .price-basis > p { position: absolute; z-index: 5; top: calc(100% + 3px); left: 0; width: 204px; margin: 0; padding: 7px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-focus); color: var(--ink); font-size: 0.66rem; font-weight: 500; line-height: 1.36; white-space: normal; }
 /* When the source last showed this home, said beside the source's name on
