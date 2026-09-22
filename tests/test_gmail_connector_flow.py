@@ -90,7 +90,9 @@ def test_bounded_gmail_test_enters_normal_ranking_storage_and_provider_state(
             "SELECT platform, score FROM listings LIMIT 1",
         ).fetchone()
     assert started.status_code == 303
-    assert "Gmail+alert+test+started" in started.headers["location"]
+    # The result lands on the email card, so that is where the check returns.
+    assert started.headers["location"].startswith("/alerts"), "not the dashboard"
+    assert "Checking+your+inbox+now" in started.headers["location"]
     assert provider is not None and provider.state == "working"
     assert aggregate is not None and aggregate.state == "working"
     assert listing is not None

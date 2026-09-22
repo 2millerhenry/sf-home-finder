@@ -2536,7 +2536,12 @@ def create_app(
                 status_code=303,
             )
         if scanner.is_running:
-            return RedirectResponse("/?message=Scan+already+running", status_code=303)
+            # The result lands on this card, so this is where the reader has to
+            # stay -- the dashboard does not carry the answer they asked for.
+            return RedirectResponse(
+                "/alerts?message=A+check+is+already+running.+Its+result+lands+on+this+card+on+its+own#email",
+                status_code=303,
+            )
         gmail_sources = configured_gmail_sources()
         if not gmail_sources:
             return RedirectResponse(
@@ -2561,9 +2566,12 @@ def create_app(
                     configured=True,
                 )
             scanner.refresh_gmail_connector_state()
-            return RedirectResponse("/?message=Scan+already+running", status_code=303)
+            return RedirectResponse(
+                "/alerts?message=A+scan+was+already+running%2C+so+this+check+did+not+start#email",
+                status_code=303,
+            )
         return RedirectResponse(
-            "/?message=Gmail+alert+test+started%3B+each+provider+will+report+its+own+result",
+            "/alerts?message=Checking+your+inbox+now%3B+each+provider+reports+on+this+card#email",
             status_code=303,
         )
 

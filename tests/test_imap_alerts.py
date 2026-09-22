@@ -820,3 +820,32 @@ def test_the_page_never_miscounts_the_sources_that_run_on_their_own() -> None:
             assert "no_setup_count_word" in before, (
                 f'"{phrase}" is counted with something other than the no-setup list'
             )
+
+
+def test_the_email_card_reports_a_check_the_way_the_others_do() -> None:
+    """Check for alerts now starts a scan whose result lands on this card, so
+    the card has to be able to say so. Without these hooks the badge sat on
+    whatever was true when the page rendered until somebody reloaded, which is
+    the fault the Facebook card was rebuilt to remove."""
+    import pathlib
+
+    page = pathlib.Path("sf_housing/templates/alerts.html").read_text(encoding="utf-8")
+
+    assert 'data-connector-card="gmail"' in page, "the page watches this card"
+    assert 'data-connector-badge="gmail"' in page, "and repaints its badge"
+    assert 'data-connector-progress="gmail"' in page, "with real progress while it runs"
+    assert 'data-connector-when="gmail"' in page, "and says when it last ran"
+    # The provider tiles settle with it; leaving four of them stale until a
+    # reload is the same fault in a smaller place.
+    assert 'data-connector-badge="{{ provider.state.key }}"' in page
+
+
+def test_the_email_check_stays_on_the_card_when_a_scan_is_running() -> None:
+    import pathlib
+
+    app = pathlib.Path("sf_housing/app.py").read_text(encoding="utf-8")
+    gmail_test = app[app.index('@application.post("/alerts/gmail/test")'):]
+    gmail_test = gmail_test[: gmail_test.index("@application.post", 10)]
+
+    assert '"/?message=Scan+already+running"' not in gmail_test, "not the dashboard"
+    assert "/alerts?message=A+check+is+already+running" in gmail_test

@@ -124,14 +124,14 @@
   </div>
 </section>
 
-<section class="connect-panel" aria-labelledby="{% if email_connected or gmail_connected %}gmail-connected-title{% else %}gmail-title{% endif %}">
+<section class="connect-panel" id="email" data-connector-card="gmail" aria-labelledby="{% if email_connected or gmail_connected %}gmail-connected-title{% else %}gmail-title{% endif %}">
   {% if email_connected or gmail_connected %}
     <header class="connect-head">
       <div>
         <p class="step-eyebrow"><span class="step-number is-done">&#10003;</span> Step 1 &middot; email connected</p>
         <h2 id="gmail-connected-title">Email listings</h2>
       </div>
-      <span class="connector-state {{ gmail_state.state if gmail_state else 'not_configured' }}">{{ gmail_state.label if gmail_state else 'Optional' }}</span>
+      <span class="connector-state {{ gmail_state.state if gmail_state else 'not_configured' }}" data-connector-badge="gmail">{{ gmail_state.label if gmail_state else 'Optional' }}</span>
     </header>
     <p class="connect-lede">
       {% if email_connected %}Reading alert email from <strong>{{ email_address }}</strong>.
@@ -159,6 +159,11 @@
       {% endif %}
     </div>
     {% endif %}
+    <div class="conn-progress" data-connector-progress="gmail" hidden>
+      <div class="conn-bar"><span data-progress-fill></span></div>
+      <p class="conn-progress-label"><span data-progress-text>Reading your inbox…</span><span class="conn-elapsed" data-progress-elapsed></span></p>
+    </div>
+    <p class="conn-sub" data-connector-when="gmail"{% if not (gmail_state and gmail_state.last_attempt_at) %} hidden{% endif %}>{% if gmail_state and gmail_state.last_attempt_at %}Last checked {{ gmail_state.last_attempt_at | pacific_datetime }}{% if gmail_state.observed_items %} &middot; {{ gmail_state.observed_items }} imported in total{% endif %}{% endif %}</p>
     <div class="connect-actions">
       <form method="post" action="/alerts/gmail/test"><button class="primary" type="submit">Check for alerts now</button></form>
       <form method="post" action="/alerts/{% if email_connected %}email{% else %}gmail{% endif %}/disconnect">
@@ -174,8 +179,8 @@
       <div>
         <strong>{{ provider.name }}</strong>
         {% if provider.state %}
-          <span class="connector-state {{ provider.state.state }}">{{ provider.state.label }}</span>
-          {% if not waiting %}<small>{{ provider.state.message }}</small>{% endif %}
+          <span class="connector-state {{ provider.state.state }}" data-connector-badge="{{ provider.state.key }}">{{ provider.state.label }}</span>
+          {% if not waiting %}<small data-connector-message="{{ provider.state.key }}">{{ provider.state.message }}</small>{% endif %}
         {% else %}
           <span class="connector-state configured_unverified">Ready to test</span>
         {% endif %}

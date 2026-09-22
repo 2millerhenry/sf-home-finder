@@ -48,6 +48,7 @@
       badge.textContent = status.label;
     }
     setText("data-connector-message", key, status.message);
+    if (!document.querySelector('[data-connector-when="' + key + '"]')) return;
     // A working connector's next step only restates its result; two lines
     // saying the same thing read as a page unsure of its own answer.
     setText("data-connector-next-step", key, status.needs_action ? status.next_step : "");
@@ -114,10 +115,18 @@
         return response.json();
       })
       .then(function (states) {
+        // Paint every connector the page shows, not only the one whose check
+        // is running: a Gmail check settles four provider tiles as well as the
+        // card above them, and leaving those stale until a reload is the same
+        // fault in a smaller place.
+        Object.keys(states).forEach(function (key) {
+          if (document.querySelector('[data-connector-badge="' + key + '"]')) {
+            apply(key, states[key]);
+          }
+        });
         watched = watched.filter(function (key) {
           var status = states[key];
           if (!status) return true;
-          apply(key, status);
           if (status.settled) show(key, false);
           return !status.settled;
         });
