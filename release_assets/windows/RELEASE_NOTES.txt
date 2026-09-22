@@ -1,3 +1,10 @@
+SF Home Finder 0.5.19 for Windows x64
+
+The mark on a rent far under its area now reads "46% under" on one line, and
+the note behind it is a sentence shorter. It said "46% under market" before,
+which wrapped onto two lines on every flagged row.
+
+
 SF Home Finder 0.5.18 for Windows x64
 
 A rent far below what its area charges for a home that size now carries a mark
