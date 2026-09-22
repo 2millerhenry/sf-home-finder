@@ -1,3 +1,20 @@
+SF Home Finder 0.5.18
+
+A rent far below what its area charges for a home that size now carries a mark
+you can open. It says what homes like it let for there, and that the figure can
+be a real find or a scam. The home keeps its place on the board either way.
+
+Movoto does not state how many bedrooms one home in seven has, and those homes
+were the whole of the Other homes tab. Its floor area answers the question, and
+the row says that is where the answer came from.
+
+Facebook homes outside your target areas showed a postcode and a map pin where
+their area should be.
+
+Scrolling the board right no longer reaches a band of empty table past the last
+column.
+
+
 SF Home Finder 0.5.17
 
 Check for alerts now reports on the card you pressed it on. It used to start
