@@ -31,7 +31,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .apify import ApifyTokenError, ApifyTokenStore
 from . import DONATE_URL, RELEASE_REPO, __version__
 from .coverage import ALERT_SETUP_SEARCHES, coverage_is_showable
-from .connectors import GMAIL_PROVIDERS, ConnectorStatus
+from .connectors import ConnectorStatus, GMAIL_PROVIDERS, resolve_stalled_check
 from .database import DatabaseUnreadableError, Repository
 from .deal_profile import (
     BEDROOM_PATHS,
@@ -1933,7 +1933,11 @@ def create_app(
                 "/preferences?welcome=1&message=Finish+your+deal+first%3B+free+public+sources+start+automatically+after+you+save+it",
                 status_code=303,
             )
-        connector_states = repository.connector_states()
+        now = datetime.now(UTC)
+        connector_states = {
+            key: resolve_stalled_check(status, now=now)
+            for key, status in repository.connector_states().items()
+        }
         # A provider that is checked directly does not belong on a list of
         # things email adds. Zumper moved to a direct source and kept its row
         # here, so a connected mailbox showed it waiting for an alert that
@@ -2138,6 +2142,36 @@ def create_app(
     def support_report_json(request: Request):
         return JSONResponse(support_report(request).to_dict())
 
+    def _start_facebook_check(trigger: str) -> bool:
+        """Mark the check before starting it, never after.
+
+        The scan runs in a daemon thread and can finish before this function
+        returns. Writing "checking" after start_scan therefore overwrites the
+        result the scan just recorded, and nothing writes it again -- the card
+        is stranded on Testing until the next scheduled run.
+        """
+        previous = repository.connector_state("apify")
+        repository.set_connector_state(
+            "apify",
+            "checking",
+            message="Running one bounded Facebook check.",
+            configured=True,
+            attempted=True,
+        )
+        if scanner.start_scan(trigger):
+            return True
+        # A check that is not running must not be left claiming that it is.
+        # The token is saved by the time this runs, so "not configured" is no
+        # longer true, and "checking" is what is being undone.
+        stale = {"checking", "not_configured"}
+        repository.set_connector_state(
+            "apify",
+            previous.state if previous and previous.state not in stale else "configured_unverified",
+            message="A scan was already running, so this check did not start.",
+            configured=True,
+        )
+        return False
+
     @application.post("/alerts/apify/token")
     def save_apify_token(apify_token: str = Form(...)):
         try:
@@ -2149,24 +2183,11 @@ def create_app(
         # Saving a token is not a thing anybody wants for its own sake; they
         # want Facebook homes. Start the bounded check here rather than making
         # the token a first step that silently waits for a second one.
-        if scanner.start_scan("connector_test"):
-            repository.set_connector_state(
-                "apify",
-                "checking",
-                message="Running one bounded Facebook check.",
-                configured=True,
-                attempted=True,
-            )
+        if _start_facebook_check("connector_test"):
             return RedirectResponse(
                 "/alerts?open=facebook&message=Token+saved+and+checking+Facebook+now#facebook",
                 status_code=303,
             )
-        repository.set_connector_state(
-            "apify",
-            "configured_unverified",
-            message="Token saved locally. A scan was already running, so the check has not started.",
-            configured=True,
-        )
         return RedirectResponse(
             "/alerts?open=facebook&message=Token+saved.+A+scan+is+already+running%3B+run+the+test+when+it+finishes#facebook",
             status_code=303,
@@ -2176,10 +2197,7 @@ def create_app(
     def test_apify_connector():
         if not apify_tokens.is_configured:
             return RedirectResponse("/alerts?error=Connect+Apify+first", status_code=303)
-        repository.set_connector_state(
-            "apify", "checking", message="Running one bounded Facebook check.", attempted=True
-        )
-        if not scanner.start_scan("connector_test"):
+        if not _start_facebook_check("connector_test"):
             return RedirectResponse(
                 "/alerts?open=facebook&message=A+scan+is+already+running%3B+Facebook+is+part+of+it+and+this+card+will+update#facebook",
                 status_code=303,
@@ -2720,7 +2738,10 @@ def create_app(
                     "last_attempt_at": status.last_attempt_at,
                     "last_success_at": status.last_success_at,
                 }
-                for key, status in repository.connector_states().items()
+                for key, status in (
+                    (key, resolve_stalled_check(status, now=datetime.now(UTC)))
+                    for key, status in repository.connector_states().items()
+                )
             }
         )
 

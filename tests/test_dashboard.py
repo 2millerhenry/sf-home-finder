@@ -1942,3 +1942,86 @@ def test_saving_a_token_starts_the_check_without_a_second_click(tmp_path: Path) 
     assert state is not None and state.state == "checking", (
         "the check is already running, not merely offered"
     )
+
+
+def test_a_check_is_marked_before_it_starts_not_after(tmp_path: Path) -> None:
+    """The scan runs in a daemon thread and can finish first. Marking the
+    connector after start_scan therefore overwrites the result the scan just
+    wrote, stranding the card on Testing until the next scheduled run -- the
+    exact failure this card was changed to prevent. Assert the ordering
+    itself rather than racing it."""
+    settings = app_settings(tmp_path)
+    application = create_app(settings=settings, sources=[], enable_scheduler=False)
+    repository = application.state.repository
+    scanner = application.state.scanner
+
+    seen: list[str | None] = []
+    original = scanner.start_scan
+
+    def spy(trigger: str = "manual", sources=None):
+        state = repository.connector_state("apify")
+        seen.append(state.state if state else None)
+        return original(trigger, sources)
+
+    scanner.start_scan = spy
+    try:
+        with TestClient(application) as client:
+            client.post(
+                "/alerts/apify/token",
+                data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
+                follow_redirects=False,
+            )
+    finally:
+        scanner.start_scan = original
+
+    assert seen == ["checking"], (
+        "the connector must already read checking when the scan is handed off, "
+        f"or the scan's own result can be overwritten by it; saw {seen}"
+    )
+
+
+def test_a_refused_start_does_not_leave_a_check_claiming_to_run(tmp_path: Path) -> None:
+    settings = app_settings(tmp_path)
+    started, release = threading.Event(), threading.Event()
+    application = create_app(
+        settings=settings,
+        sources=[WaitingDashboardSource(started, release)],
+        enable_scheduler=False,
+    )
+
+    with TestClient(application) as client:
+        client.post("/scan", follow_redirects=False)
+        assert started.wait(timeout=2)
+        # A scan is already running, so this one cannot start.
+        client.post(
+            "/alerts/apify/token",
+            data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
+            follow_redirects=False,
+        )
+        state = application.state.repository.connector_state("apify")
+        release.set()
+
+    assert state is not None and state.state == "configured_unverified", (
+        "a check that never started must not report itself as running"
+    )
+
+
+def test_an_abandoned_check_stops_claiming_to_be_running(tmp_path: Path) -> None:
+    """A quit or a crash mid-scan never writes the result, so the checking row
+    it leaves behind would read Testing for as long as the row survives."""
+    from sf_housing.connectors import ConnectorStatus, resolve_stalled_check
+
+    now = datetime.now(UTC)
+    fresh = ConnectorStatus(
+        key="apify", state="checking",
+        last_attempt_at=(now - timedelta(minutes=2)).isoformat(),
+    )
+    abandoned = ConnectorStatus(
+        key="apify", state="checking",
+        last_attempt_at=(now - timedelta(hours=3)).isoformat(),
+    )
+
+    assert resolve_stalled_check(fresh, now=now).state == "checking", "still plausible"
+    settled = resolve_stalled_check(abandoned, now=now)
+    assert settled.state == "degraded", "no longer plausible"
+    assert "interrupted" in settled.message

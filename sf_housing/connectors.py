@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -86,6 +87,30 @@ class ConnectorStatus:
             "quota_blocked": "Allowance reached",
             "disabled": "Optional",
         }[self.state]
+
+
+# A scan interrupted by a quit or a crash never writes its result, so the
+# "checking" row it left behind would claim to be testing for good.
+CHECK_STALE_AFTER_SECONDS = 20 * 60
+
+
+def resolve_stalled_check(status: ConnectorStatus, *, now: datetime) -> ConnectorStatus:
+    """Report an abandoned check as unfinished rather than still running."""
+    if status.state != "checking" or not status.last_attempt_at:
+        return status
+    try:
+        started = datetime.fromisoformat(status.last_attempt_at)
+    except ValueError:
+        return status
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if (now - started).total_seconds() <= CHECK_STALE_AFTER_SECONDS:
+        return status
+    return replace(
+        status,
+        state="degraded",
+        message="The last check was interrupted before it reported anything. Run it again.",
+    )
 
 
 def connector_state_for_error(message: str) -> str:

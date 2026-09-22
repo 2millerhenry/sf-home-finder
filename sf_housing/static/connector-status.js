@@ -55,8 +55,21 @@
   }
 
   // Give up rather than poll a stalled scan forever; five minutes is well past
-  // the bounded check's own ceiling.
+  // the bounded check's own ceiling of about two.
   var deadline = Date.now() + 5 * 60 * 1000;
+
+  // Stopping silently would leave the badge reading Testing with nothing
+  // behind it, which is the failure this whole file exists to prevent.
+  function giveUp() {
+    watched.forEach(function (key) {
+      setText(
+        "data-connector-next-step",
+        key,
+        "This check has not reported back. Reload the page, and run it again if it still says Testing."
+      );
+    });
+    watched = [];
+  }
 
   function poll() {
     fetch("/alerts/connectors.json", { credentials: "same-origin" })
@@ -71,12 +84,15 @@
           apply(key, status);
           return !status.settled;
         });
-        if (watched.length && Date.now() < deadline) window.setTimeout(poll, 3000);
+        if (!watched.length) return;
+        if (Date.now() < deadline) window.setTimeout(poll, 3000);
+        else giveUp();
       })
       .catch(function () {
         // A dropped request mid-scan is not worth reporting; try again, and
         // let the deadline end it if the server is genuinely gone.
         if (Date.now() < deadline) window.setTimeout(poll, 6000);
+        else giveUp();
       });
   }
 
