@@ -1,3 +1,19 @@
+SF Home Finder 0.5.16
+
+The first Facebook check spends its hundred slots on homes inside your deal.
+Three of the four feeds it reads went out yesterday with no price filter at
+all, so a room at any rent could take a slot. Every feed now carries the same
+price band, built from Your deal.
+
+That band is a quarter either side of your range rather than a twentieth.
+Facebook prices are asking prices and are often mislabelled -- a room
+advertised at the whole flat's rent, a monthly figure entered as weekly -- and
+the narrow band was discarding homes that read as matches on sight. Anything
+outside your deal still ranks below anything inside it.
+
+Every feed is read newest first.
+
+
 SF Home Finder 0.5.15
 
 Facebook Marketplace was reading ten listings a scan and reporting nine. The
