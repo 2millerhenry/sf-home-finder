@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from sf_housing.apify import ApifyTokenStore
-from sf_housing.sources import ApifyFacebookMarketplaceSource, facebook_coordinate_neighborhood
+from sf_housing.sources import (
+    ApifyFacebookMarketplaceSource,
+    SourceError,
+    facebook_coordinate_neighborhood,
+)
 
 
 VALID_TOKEN = "apify_api_abcdefghijklmnopqrstuvwxyz123456"
@@ -59,8 +65,8 @@ def test_apify_facebook_result_is_normalized_without_exposing_token(tmp_path, pr
     url, request = client.call
     assert VALID_TOKEN not in url
     assert request["headers"] == {"Authorization": f"Bearer {VALID_TOKEN}"}
-    # The default stays inside Apify's $5 free tier; preferences raise it.
-    assert request["json"]["resultsLimit"] == 10
+    # An empty board gets one deep read; see the steady-state test below.
+    assert request["json"]["resultsLimit"] == 100
     starts = [entry["url"] for entry in request["json"]["startUrls"]]
     assert any("propertyrentals" in url for url in starts), "whole units"
     assert any("sublet" in url for url in starts), "and sublets, which never reach that feed"
@@ -152,3 +158,46 @@ def test_apify_monthly_run_cap_is_persistent(tmp_path) -> None:
     assert tokens.reserve_monthly_run(limit=2) is False
     assert ApifyTokenStore(tmp_path / "apify-token.txt").reserve_monthly_run(limit=2) is False
     assert os.stat(tokens.usage_path).st_mode & 0o777 == 0o600
+
+
+def test_the_first_scan_fills_the_board_and_the_rest_stay_cheap(tmp_path, preferences) -> None:
+    """An empty board is the worst moment to be frugal -- the first read is what
+    makes the source look like it works at all. Every read after it only has to
+    catch what is new, and at roughly $0.013 of Apify credit a listing that
+    difference is the whole month's budget."""
+    tokens = ApifyTokenStore(tmp_path / "apify-token.txt")
+    tokens.save(VALID_TOKEN)
+    source = ApifyFacebookMarketplaceSource(tokens)
+
+    assert tokens.first_scan_pending("marketplace") is True
+
+    client = FakeClient()
+    source.search(client, preferences)
+    assert client.call[1]["json"]["resultsLimit"] == 100, "fill the board once"
+    assert tokens.first_scan_pending("marketplace") is False, "and only once"
+
+    again = FakeClient()
+    source.search(again, preferences)
+    assert again.call[1]["json"]["resultsLimit"] == 10, "then only catch what is new"
+
+
+def test_a_failed_first_scan_keeps_its_deep_read(tmp_path, preferences) -> None:
+    """Spending the one deep read on a run that returned nothing would leave a
+    permanently empty board trickling ten a scan."""
+    tokens = ApifyTokenStore(tmp_path / "apify-token.txt")
+    tokens.save(VALID_TOKEN)
+    source = ApifyFacebookMarketplaceSource(tokens)
+
+    class EmptyResponse(FakeResponse):
+        def json(self):
+            return []
+
+    class EmptyClient(FakeClient):
+        def post(self, url, **kwargs):
+            self.call = (url, kwargs)
+            return EmptyResponse()
+
+    with pytest.raises(SourceError):
+        source.search(EmptyClient(), preferences)
+
+    assert tokens.first_scan_pending("marketplace") is True, "the deep read is still owed"

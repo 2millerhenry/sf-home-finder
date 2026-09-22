@@ -4888,6 +4888,10 @@ class ApifyFacebookMarketplaceSource:
     # not an arbitrary smallness; it was the free tier. Raising the ceiling is
     # a spending decision, so it lives in preferences rather than in a default.
     results_limit = 10
+    # One deep read when the board is empty, then the cheap steady trickle.
+    # At roughly $0.013 of credit a listing, the first scan is about $1.30 of
+    # a $5 monthly tier and every scan after it about $0.13.
+    first_scan_results_limit = 100
     max_results_per_scan = 250
     monthly_run_limit = 60
     request_timeout_seconds = 75.0
@@ -5148,6 +5152,7 @@ class ApifyFacebookMarketplaceSource:
             )
         self.search_url = self._marketplace_url(preferences)
         start_urls = self._start_urls(preferences)
+        first_scan = self.tokens.first_scan_pending("marketplace")
         whole_unit = preferences.section("whole_unit")
         results_limit = self.results_limit
         if whole_unit.get("enabled", True) is True:
@@ -5160,6 +5165,8 @@ class ApifyFacebookMarketplaceSource:
             except (TypeError, ValueError) as exc:
                 raise SourceError("The Facebook result limit must be a whole number.") from exc
             results_limit = max(self.results_limit, min(results_limit, self.max_results_per_scan))
+        if first_scan:
+            results_limit = max(results_limit, self.first_scan_results_limit)
         payload = {
             "startUrls": [{"url": url} for url in start_urls],
             # Ten newest detailed rental cards twice a day cover all housing
@@ -5189,7 +5196,12 @@ class ApifyFacebookMarketplaceSource:
             raise SourceError("The Facebook helper returned invalid JSON.") from exc
         if not isinstance(rows, list):
             raise SourceError("The Facebook helper returned an unexpected result format.")
-        return self.parse_rows(rows, preferences)
+        listings = self.parse_rows(rows, preferences)
+        # Only once it has actually worked: a first scan that failed should
+        # still get its deep read rather than quietly dropping to ten.
+        if first_scan and listings:
+            self.tokens.mark_first_scan_done("marketplace")
+        return listings
 
     def enrich(self, client: httpx.Client, listing: ListingCandidate) -> ListingCandidate:
         return listing
@@ -5277,8 +5289,11 @@ class FacebookGroupsSource:
     detail_budget = 0
     scheduled_only = True
     manual_scan_enabled = True
-    # About $0.014 of credit per post, on the same $5 monthly free tier.
+    # About $0.016 of credit per post, on the same $5 monthly free tier, so
+    # groups get the same shape: one deep read to fill the board, then enough
+    # to catch what is new.
     results_limit = 10
+    first_scan_results_limit = 50
     manual_results_limit = 30
     monthly_post_limit = 400
     request_timeout_seconds = 75.0
@@ -5405,6 +5420,11 @@ class FacebookGroupsSource:
         if not group_urls:
             return []
         self.search_url = group_urls[0]
+        # The same shape as Marketplace: one deep read while the board is
+        # empty, then only enough to catch what is new.
+        first_scan = self.tokens.first_scan_pending("groups")
+        if first_scan:
+            results_limit = max(results_limit, self.first_scan_results_limit)
         if not self.tokens.reserve_monthly_group_posts(results_limit, self.monthly_post_limit):
             raise SourceError(
                 f"The local {self.monthly_post_limit}-post monthly Facebook Groups safety cap was reached."
@@ -5439,7 +5459,12 @@ class FacebookGroupsSource:
             raise SourceError("The Facebook Groups helper returned invalid JSON.") from exc
         if not isinstance(rows, list):
             raise SourceError("The Facebook Groups helper returned an unexpected result format.")
-        return self.parse_rows(rows, preferences)
+        listings = self.parse_rows(rows, preferences)
+        # Only once it has actually worked, so a first read that came back
+        # empty keeps its deep pull rather than dropping to a trickle forever.
+        if first_scan and listings:
+            self.tokens.mark_first_scan_done("groups")
+        return listings
 
     def search(self, client: httpx.Client, preferences: Preferences) -> list[ListingCandidate]:
         return self._search(client, preferences, results_limit=self.results_limit)

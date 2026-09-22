@@ -2998,6 +2998,11 @@ class Scanner:
             tally.failed += 1
             self._add_progress(lane, sources_failed=1)
             message = f"{type(exc).__name__}: {exc}"
+            # A SourceError is already written as a sentence for the person
+            # reading the card. Prefixing it with the exception's class name
+            # turned "Apify rejected the API token" into something that looks
+            # like a crash report; the diagnostic form stays on the run record.
+            human = str(exc) if isinstance(exc, SourceError) else message
             self.repository.finish_source_run(
                 source_run_id,
                 "error",
@@ -3026,7 +3031,7 @@ class Scanner:
                     # guess made from its message text.
                     getattr(exc, "connector_state", None)
                     or connector_state_for_error(message),
-                    message=message[:1000],
+                    message=human[:1000],
                     observed_items=source_seen,
                     attempted=True,
                 )

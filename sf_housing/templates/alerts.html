@@ -415,7 +415,7 @@
         <summary>How this works</summary>
         <p>No app is allowed to read Marketplace directly, so Apify reads it and hands back the results. <strong>Your Facebook login is never used or stored.</strong></p>
         {{ apify_steps() }}
-        <p class="conn-caps">Apify's free monthly credit covers this. Hard caps of <strong>60 checks</strong> and <strong>400 group posts</strong> a month are counted here and stopped on reaching them, so it cannot run up a bill.</p>
+        <p class="conn-caps">The first check reads about <strong>100 listings</strong> to fill the board; every check after it reads about <strong>10</strong>, which is all it takes to catch what is new. Hard caps of <strong>60 checks</strong> and <strong>400 group posts</strong> a month are counted here and stopped on reaching them, so it cannot run up a bill. Apify's free $5 monthly credit covers roughly a fortnight of twice-daily checks, or a full month once a day.</p>
       </details>
     </div>
 
@@ -452,26 +452,41 @@
     </div>
   </details>
 
-  <details class="extra">
+    <details class="extra" id="furnished-finder" data-connector-card="furnished_finder">
     <summary>
       <span>{{ source_chip('Furnished Finder') }}<small>Free &middot; needs Chrome &middot; about 5 minutes</small></span>
-      <span class="connector-state {{ furnished_finder_state.state if furnished_finder_state else 'not_configured' }}">{{ furnished_finder_state.label if furnished_finder_state else 'Optional' }}</span>
+      <span class="connector-state {{ furnished_finder_state.state if furnished_finder_state else 'not_configured' }}" data-connector-badge="furnished_finder">{{ furnished_finder_state.label if furnished_finder_state else 'Optional' }}</span>
     </summary>
-    <p class="extra-why">Furnished Finder shows its listings only to a signed-in browser, so nothing can read it from outside. A small Chrome add-on reads the cards <em>already on your screen</em> and passes the facts to this app. <strong>No Furnished Finder password is asked for or stored.</strong></p>
-    {% if furnished_finder_state and furnished_finder_state.message %}<p class="connector-message">{{ furnished_finder_state.message }}</p>{% endif %}
-    <ol class="extra-steps">
-      <li>Press <strong>Show extension folder</strong> below. A Finder window opens on the folder you will need in step 4.</li>
-      <li>In Chrome, open a new tab and go to <code>chrome://extensions</code>.</li>
-      <li>Turn on <strong>Developer mode</strong> with the switch at the top right.</li>
-      <li>Press <strong>Load unpacked</strong> at the top left and choose the folder from step 1.</li>
-      <li>Open <a href="https://www.furnishedfinder.com/housing/San-Francisco--CA" target="_blank" rel="noopener noreferrer">Furnished Finder&rsquo;s San Francisco listings</a> and let the results load.</li>
-      <li>Click the extension&rsquo;s icon in the Chrome toolbar, then <strong>Save this search &amp; sync</strong>.</li>
-    </ol>
-    <p class="extra-cost">The add-on runs only on Furnished Finder housing pages, and only while you have one open. Chrome marks anything loaded this way as a developer extension; that is expected, and it is the same folder you can read yourself at any time.</p>
-    <div class="connect-actions">
-      <form method="post" action="/alerts/furnished-finder/show-folder"><button type="submit">Show extension folder</button></form>
-      <a class="button" href="/alerts/furnished-finder-bridge.zip">Download bridge {{ bridge_version }}</a>
-      <form method="post" action="/alerts/furnished-finder/test"><button type="submit">Test bridge</button></form>
+
+    <div class="conn">
+      <p class="conn-headline" data-connector-message="furnished_finder"{% if not (furnished_finder_state and furnished_finder_state.message) %} hidden{% endif %}>{{ furnished_finder_state.message if furnished_finder_state else '' }}</p>
+      <p class="conn-sub" data-connector-when="furnished_finder"{% if not (furnished_finder_state and furnished_finder_state.last_attempt_at) %} hidden{% endif %}>{% if furnished_finder_state and furnished_finder_state.last_attempt_at %}Last checked {{ furnished_finder_state.last_attempt_at | pacific_datetime }}{% if furnished_finder_state.observed_items %} &middot; {{ furnished_finder_state.observed_items }} imported in total{% endif %}{% endif %}</p>
+      <p class="conn-note" data-connector-next-step="furnished_finder"{% if not (furnished_finder_state and furnished_finder_state.needs_action) %} hidden{% endif %}>{{ furnished_finder_state.next_step if furnished_finder_state else '' }}</p>
+
+      <div class="conn-progress" data-connector-progress="furnished_finder" hidden>
+        <div class="conn-bar"><span data-progress-fill></span></div>
+        <p class="conn-progress-label"><span data-progress-text>Checking the bridge…</span><span class="conn-elapsed" data-progress-elapsed></span></p>
+      </div>
+
+      <div class="conn-row">
+        <form method="post" action="/alerts/furnished-finder/show-folder"><button class="conn-primary" type="submit">Show extension folder</button></form>
+        <a class="button" href="/alerts/furnished-finder-bridge.zip">Download bridge {{ bridge_version }}</a>
+        <form method="post" action="/alerts/furnished-finder/test"><button type="submit">Test bridge</button></form>
+      </div>
+
+      <details class="conn-about"{% if not (furnished_finder_state and furnished_finder_state.working) %} open{% endif %}>
+        <summary>How this works</summary>
+        <p>Furnished Finder shows its listings only to a signed-in browser, so nothing can read it from outside. A small Chrome add-on reads the cards <em>already on your screen</em> and passes the facts to this app. <strong>No Furnished Finder password is asked for or stored.</strong></p>
+        <ol class="extra-steps">
+          <li>Press <strong>Show extension folder</strong>. A Finder window opens on the folder you need in step 4.</li>
+          <li>In Chrome, open a new tab and go to <code>chrome://extensions</code>.</li>
+          <li>Turn on <strong>Developer mode</strong> with the switch at the top right.</li>
+          <li>Press <strong>Load unpacked</strong> and choose the folder from step 1.</li>
+          <li>Open <a href="https://www.furnishedfinder.com/housing/San-Francisco--CA" target="_blank" rel="noopener noreferrer">Furnished Finder&rsquo;s San Francisco listings</a> and let them load.</li>
+          <li>Click the add-on&rsquo;s icon in the Chrome toolbar, then <strong>Save this search &amp; sync</strong>.</li>
+        </ol>
+        <p class="conn-caps">The add-on runs only on Furnished Finder housing pages, and only while you have one open. Chrome marks anything loaded this way as a developer extension; that is expected, and it is the same folder you can read yourself at any time.</p>
+      </details>
     </div>
   </details>
 </section>

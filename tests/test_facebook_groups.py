@@ -62,6 +62,7 @@ def test_public_facebook_group_posts_become_deduplicable_housing_candidates(tmp_
     tokens = ApifyTokenStore(tmp_path / "apify-token.txt")
     tokens.save(VALID_TOKEN)
     source = FacebookGroupsSource(tokens)
+    tokens.mark_first_scan_done("groups")  # the steady-state payload
     client = GroupClient()
 
     listings = source.search(client, group_preferences(preferences))
@@ -91,6 +92,7 @@ def test_manual_group_scan_reads_deeper_than_scheduled_scan(tmp_path, preference
     tokens = ApifyTokenStore(tmp_path / "apify-token.txt")
     tokens.save(VALID_TOKEN)
     source = FacebookGroupsSource(tokens)
+    tokens.mark_first_scan_done("groups")  # steady state, not the first fill
     client = GroupClient()
 
     source.search_for_trigger(client, group_preferences(preferences), "manual")
@@ -156,3 +158,26 @@ def test_facebook_group_post_budget_stops_before_the_free_tier_limit(tmp_path) -
     assert tokens.reserve_monthly_group_posts(5, limit=10) is True
     assert tokens.reserve_monthly_group_posts(5, limit=10) is True
     assert tokens.reserve_monthly_group_posts(5, limit=10) is False
+
+
+def test_groups_fill_the_board_once_then_only_catch_what_is_new(tmp_path, preferences) -> None:
+    """The same shape as Marketplace, and for the same reason: an empty board
+    is the worst moment to be frugal, and at about $0.016 of Apify credit a
+    post the steady state is what has to stay small."""
+    tokens = ApifyTokenStore(tmp_path / "apify-token.txt")
+    tokens.save(VALID_TOKEN)
+    source = FacebookGroupsSource(tokens)
+
+    assert tokens.first_scan_pending("groups") is True
+
+    first = GroupClient()
+    source.search(first, group_preferences(preferences))
+    assert first.call[1]["json"]["resultsLimit"] == 50, "fill the board once"
+    assert tokens.first_scan_pending("groups") is False
+
+    later = GroupClient()
+    source.search(later, group_preferences(preferences))
+    assert later.call[1]["json"]["resultsLimit"] == 10, "then only catch what is new"
+
+    # Marketplace keeps its own marker; connecting groups is a separate moment.
+    assert tokens.first_scan_pending("marketplace") is True

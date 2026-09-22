@@ -18,6 +18,10 @@ class ApifyTokenStore:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.usage_path = self.path.with_name("apify-usage.json")
+        # Its own file rather than a key in the usage record, which is wiped
+        # every month: filling the board is a once-per-install event.
+        self.first_scan_path = self.path.with_name("apify-first-scan-done")
+        self.first_group_scan_path = self.path.with_name("apify-first-group-scan-done")
 
     @property
     def token(self) -> str | None:
@@ -36,6 +40,22 @@ class ApifyTokenStore:
         if not self._valid(value):
             raise ApifyTokenError("Paste a valid Apify API token beginning with apify_api_.")
         write_private(self.path, value)
+
+    def _first_scan_path(self, kind: str) -> Path:
+        return self.first_group_scan_path if kind == "groups" else self.first_scan_path
+
+    def first_scan_pending(self, kind: str = "marketplace") -> bool:
+        """Whether this source has yet to fill the board once.
+
+        An empty board is the worst moment to be frugal: the first read is
+        what makes the source look like it works at all. Every read after it
+        only has to catch what is new, which is a far smaller job. Groups keep
+        their own marker, because connecting them is its own separate moment.
+        """
+        return not self._first_scan_path(kind).exists()
+
+    def mark_first_scan_done(self, kind: str = "marketplace") -> None:
+        write_private(self._first_scan_path(kind), datetime.now(UTC).isoformat(timespec="seconds"))
 
     def reserve_monthly_run(self, limit: int = 60) -> bool:
         """Reserve one actor call before sending it; fail closed at the cap."""

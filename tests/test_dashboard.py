@@ -2095,3 +2095,49 @@ def test_a_second_press_does_not_overwrite_a_check_already_running(tmp_path: Pat
         "a running check must survive an impatient second press"
     )
     assert "Running one bounded Facebook check." in state.message
+
+
+def test_a_source_error_reaches_the_card_as_a_sentence(tmp_path: Path) -> None:
+    """"SourceError: Apify rejected the API token" reads like a crash report.
+    The sentence was already written for the person; the class name in front
+    of it was for the log."""
+    from sf_housing.apify import ApifyTokenStore
+    from sf_housing.sources import SourceError
+
+    settings = app_settings(tmp_path)
+    # Without a token the app reconciles this connector back to "not
+    # configured" and the failure message never survives to be read.
+    ApifyTokenStore(settings.data_dir / "apify-token.txt").save(
+        "apify_api_abcdefghijklmnopqrstuvwxyz123456"
+    )
+
+    class RefusingSource:
+        platform = "Facebook Marketplace"
+        mode = "automatic"
+        search_url = "https://example.test/facebook"
+        manual_reason = None
+        detail_budget = 0
+        connector_key = "apify"
+
+        def search(self, client, preferences):
+            raise SourceError("Apify rejected the API token; reconnect it from Alerts.")
+
+        def enrich(self, client, listing):
+            return listing
+
+    application = create_app(
+        settings=settings, sources=[RefusingSource()], enable_scheduler=False
+    )
+    with TestClient(application) as client:
+        client.post("/scan", follow_redirects=False)
+        # The seeded state is already settled, so wait for the scan's own
+        # attempt rather than for "not checking", which is true immediately.
+        for _ in range(200):
+            state = application.state.repository.connector_state("apify")
+            if state is not None and state.last_attempt_at is not None:
+                break
+            time.sleep(0.05)
+
+    assert state is not None and state.last_attempt_at is not None, "the scan ran"
+    assert state.message == "Apify rejected the API token; reconnect it from Alerts."
+    assert "SourceError" not in state.message
