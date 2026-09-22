@@ -2141,3 +2141,19 @@ def test_a_source_error_reaches_the_card_as_a_sentence(tmp_path: Path) -> None:
     assert state is not None and state.last_attempt_at is not None, "the scan ran"
     assert state.message == "Apify rejected the API token; reconnect it from Alerts."
     assert "SourceError" not in state.message
+
+
+def test_the_held_back_row_offers_the_way_to_the_near_matches(tmp_path: Path) -> None:
+    """The row that counts what was held back is where the way to the nearest
+    of them belongs. The link has to be the one the tab itself uses -- a
+    hand-written view name renders a page with no homes on it."""
+    import pathlib as _p
+
+    page = _p.Path("sf_housing/templates/index.html").read_text(encoding="utf-8")
+    tab = 'view=near_matches&amp;sort=closeness'
+
+    assert 'class="near-pill"' in page
+    pill = page[page.index('class="near-pill"'):]
+    pill = pill[: pill.index("</a>")]
+    assert tab in pill, f"the pill must use the tab's own URL; got {pill}"
+    assert "Check near matches" in pill

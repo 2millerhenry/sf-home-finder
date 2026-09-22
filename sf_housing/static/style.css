@@ -783,7 +783,12 @@ button.row-action { display: inline-flex; }
 /* The same answer for a shortlist that is merely short. Folded, because it is
    context rather than a problem. */
 .why-short { margin: 14px 0 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-.why-short > summary { cursor: pointer; list-style: none; color: var(--muted); font-size: 0.82rem; }
+.why-short > summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; cursor: pointer; list-style: none; color: var(--muted); font-size: 0.82rem; }
+/* The same pill as Say thanks, one size down: the row is a quiet count, and
+   the way out of it should read as available rather than urgent. */
+.near-pill { flex: 0 0 auto; display: inline-flex; align-items: center; min-height: 26px; padding: 4px 11px; border: 1px solid var(--accent); border-radius: 999px; background: var(--surface); color: var(--accent); font-size: 0.72rem; font-weight: 640; text-decoration: none; white-space: nowrap; transition: background-color 180ms var(--ease-state), color 180ms var(--ease-state); }
+.near-pill:hover { background: var(--accent); color: var(--surface); }
+.near-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .why-short > summary::-webkit-details-marker { display: none; }
 .why-short > summary:hover { color: var(--ink); }
 .why-short[open] > summary { margin-bottom: 10px; color: var(--ink); font-weight: 600; }

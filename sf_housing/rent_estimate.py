@@ -85,7 +85,11 @@ FAR_BELOW_MARKET_SHARE = 0.6
 # of $2,800 to $4,200. At 63% every one of them is caught and 22% of the
 # shortlist carries the mark; at 70% it was 28%, which is enough of the board
 # to teach somebody to stop reading it.
-SUSPICIOUS_MARKET_SHARE = 0.63
+# Said one way everywhere: percent OFF the going rate. 0.63 of market is the
+# same line as 37% off, and writing it both ways is what made a correct mark
+# look wrong. The board, the note and this constant now all count off.
+MARKED_PERCENT_OFF = 40
+SUSPICIOUS_MARKET_SHARE = 1 - MARKED_PERCENT_OFF / 100
 
 
 def _median(values: list[int]) -> int:

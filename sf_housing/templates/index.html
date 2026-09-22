@@ -272,7 +272,7 @@
             {#- A rent far under what the area charges looks the same from
                 outside whether it is a scam or the find of the month. Say
                 which it might be and leave the judgement with the reader. -#}
-            {%- if listing.market_share %}<details class="price-basis is-under-market"><summary><span aria-hidden="true">&#9873;</span> {{ 100 - listing.market_share }}% under</summary><p>This size goes for about <strong>${{ "{:,}".format(listing.market_median) }}</strong> in {{ listing.neighborhood or 'San Francisco' }}. Could be a find, could be a scam &mdash; open it before paying anything.</p></details>{% endif -%}
+            {%- if listing.market_share %}<details class="price-basis is-under-market"><summary><span aria-hidden="true">&#9873;</span> {{ 100 - listing.market_share }}% off</summary><p>{{ 100 - listing.market_share }}% off the going rate: this size usually lets for about <strong>${{ "{:,}".format(listing.market_median) }}</strong> in {{ listing.neighborhood or 'San Francisco' }}. Anything more than 40% off is marked. Could be a find, could be a scam &mdash; open it before paying anything.</p></details>{% endif -%}
             {%- elif listing.price_basis == 'estimated' -%}
             <strong class="is-estimate">&#8776;${{ "{:,}".format(listing.estimated_price) }}</strong><span>/mo</span>
             <details class="price-basis is-estimate"><summary>Estimated</summary><p>No site published a rent, so this is the median for homes its size in {{ listing.neighborhood or 'San Francisco' }}.</p></details>
@@ -458,7 +458,12 @@
   {# The list is not empty, but it is far shorter than what was collected.
      Saying which limit costs what turns "why so few?" into a decision. #}
   <details class="why-short">
-    <summary>{{ excluded_total }} more home{{ 's' if excluded_total != 1 }} were collected and held back</summary>
+    <summary>{{ excluded_total }} more home{{ 's' if excluded_total != 1 }} were collected and held back
+      {#- The nearest of those held back are one tab away, so the row that
+          counts them is where the way to them belongs. A link, not a button
+          inside the summary: clicking it must open the tab rather than
+          unfold the reasons underneath. -#}
+      <a class="near-pill" href="/?housing={{ housing_mode }}&amp;view=near_matches&amp;sort=closeness">Check near matches</a></summary>
     <ul>
       {% for item in exclusion_summary %}
       <li><b>{{ item.count }}</b> {{ item.reason }}</li>
