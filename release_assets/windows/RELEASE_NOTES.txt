@@ -1,3 +1,33 @@
+SF Home Finder 0.5.15 for Windows x64
+
+Facebook Marketplace was reading ten listings a scan and reporting nine. The
+city Property Rentals feed is also the only place it looked, and rooms and
+sublets are posted as ordinary Marketplace items that never reach that feed,
+so a whole category was missing rather than merely short. Both are fixed: the
+first check after connecting reads about a hundred listings to fill the board,
+every check after it reads about ten to catch what is new, and rooms and
+sublets are read alongside the rentals feed in the same check.
+
+Pressing Test Facebook connection now checks Facebook. It used to start a scan
+of all eighteen sources against one shared time limit, so the source the button
+exists to check was regularly the one cut for time -- the dashboard would say
+"Not checked this time" for Facebook immediately after you asked it to check
+Facebook.
+
+The card says what happened. It shows the result, when the check ran and what
+it found, and while a check is running it shows real progress from the scan
+rather than a badge that sits on Testing until you reload. A check interrupted
+by a quit is reported as unfinished instead of still running, and a failure
+arrives as a sentence rather than as its exception's class name.
+
+Public Facebook groups have their own row, their own result and a month-long
+window. They used to write into the Marketplace connector's status, so testing
+groups overwrote the Marketplace answer and said nothing about the groups.
+
+Saving the token is now the whole job: it starts the first check itself instead
+of waiting for a second press nobody knew to make.
+
+
 SF Home Finder 0.5.14 for Windows x64
 
 Clicking a column heading sorts by it, and clicking it again turns it over.
