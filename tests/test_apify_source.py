@@ -72,10 +72,11 @@ def test_apify_facebook_result_is_normalized_without_exposing_token(tmp_path, pr
     assert any("sublet" in url for url in starts), "and sublets, which never reach that feed"
     assert request["json"]["includeListingDetails"] is True
     assert request["timeout"] == 75.0
-    # The rentals feed still leads and still carries the deal's price band.
+    # The rentals feed still leads, and the band is a quarter either side of
+    # the deal rather than a five-percent collar.
     assert starts[0] == (
         "https://www.facebook.com/marketplace/114952118516947/propertyrentals/"
-        "?sortBy=creation_time_descend&radius=10&exact=false&minPrice=950&maxPrice=7875"
+        "?sortBy=creation_time_descend&radius=10&exact=false&minPrice=750&maxPrice=9375"
     )
 
 
@@ -201,3 +202,22 @@ def test_a_failed_first_scan_keeps_its_deep_read(tmp_path, preferences) -> None:
         source.search(EmptyClient(), preferences)
 
     assert tokens.first_scan_pending("marketplace") is True, "the deep read is still owed"
+
+
+def test_every_feed_carries_the_price_band_and_asks_for_the_newest(tmp_path, preferences) -> None:
+    """The keyword feeds were added without a price filter, so a room at any
+    price could spend one of the hundred slots the first scan is given. Each
+    slot is about $0.013 of Apify credit; none of them should go to a listing
+    nobody could take."""
+    tokens = ApifyTokenStore(tmp_path / "apify-token.txt")
+    tokens.save(VALID_TOKEN)
+    source = ApifyFacebookMarketplaceSource(tokens)
+
+    client = FakeClient()
+    source.search(client, preferences)
+    starts = [entry["url"] for entry in client.call[1]["json"]["startUrls"]]
+
+    assert len(starts) > 1, "the keyword feeds are the ones that had no filter"
+    for url in starts:
+        assert "minPrice=750" in url and "maxPrice=9375" in url, url
+        assert "sortBy=creation_time_descend" in url, "newest first, on every feed"

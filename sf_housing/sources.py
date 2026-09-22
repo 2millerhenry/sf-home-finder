@@ -4902,8 +4902,8 @@ class ApifyFacebookMarketplaceSource:
     def __init__(self, tokens: ApifyTokenStore):
         self.tokens = tokens
 
-    @staticmethod
-    def _marketplace_url(preferences: Preferences) -> str:
+    @classmethod
+    def _marketplace_url(cls, preferences: Preferences) -> str:
         budget = preferences.section("budget")
         whole_unit = preferences.section("whole_unit")
         two_bedroom = preferences.section("two_bedroom")
@@ -4917,8 +4917,29 @@ class ApifyFacebookMarketplaceSource:
             "radius": 10,
             "exact": "false",
         }
+        query.update(cls._price_band(preferences))
+        return (
+            "https://www.facebook.com/marketplace/114952118516947/propertyrentals/?"
+            + urlencode(query)
+        )
+
+    # A quarter either side of the deal. Facebook prices are asking prices and
+    # frequently mislabelled -- a room advertised at the whole flat's rent, a
+    # monthly figure entered as weekly -- so a five-percent collar was throwing
+    # away listings that read as matches the moment anybody looked at them.
+    # Anything outside the deal still scores below anything inside it; this
+    # only decides what is worth spending one of the hundred slots on.
+    PRICE_BAND = 0.25
+
+    @classmethod
+    def _price_band(cls, preferences: Preferences) -> dict[str, int]:
+        budget = preferences.section("budget")
+        whole_unit = preferences.section("whole_unit")
+        two_bedroom = preferences.section("two_bedroom")
+        three_bedroom = preferences.section("three_bedroom")
+        band: dict[str, int] = {}
         if budget.get("min_monthly") is not None:
-            query["minPrice"] = max(0, round(int(budget["min_monthly"]) * 0.95))
+            band["minPrice"] = max(0, round(int(budget["min_monthly"]) * (1 - cls.PRICE_BAND)))
         if budget.get("max_monthly") is not None:
             maximum = int(budget["max_monthly"])
             if whole_unit.get("enabled", True) is True:
@@ -4933,11 +4954,8 @@ class ApifyFacebookMarketplaceSource:
                     three_bedroom.get("max_per_person", 2500)
                 )
                 maximum = max(maximum, shared_total)
-            query["maxPrice"] = round(maximum * 1.05)
-        return (
-            "https://www.facebook.com/marketplace/114952118516947/propertyrentals/?"
-            + urlencode(query)
-        )
+            band["maxPrice"] = round(maximum * (1 + cls.PRICE_BAND))
+        return band
 
     @classmethod
     def _start_urls(cls, preferences: Preferences) -> list[str]:
@@ -4956,10 +4974,11 @@ class ApifyFacebookMarketplaceSource:
         if paths.intersection({"studio", "one_bedroom", "two_bedroom", "three_bedroom"}):
             keywords.append("apartment for rent San Francisco")
         keywords.append("sublet San Francisco")
+        band = cls._price_band(preferences)
         for keyword in keywords:
             urls.append(
                 "https://www.facebook.com/marketplace/114952118516947/search/?"
-                + urlencode({"query": keyword, "sortBy": "creation_time_descend"})
+                + urlencode({"query": keyword, "sortBy": "creation_time_descend", **band})
             )
         return urls
 
