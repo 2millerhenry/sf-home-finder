@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -46,6 +47,30 @@ def already_works_headline(html: str) -> str:
     )
     return headline.group(1)
 
+
+
+
+@contextmanager
+def scan_requests(application, *, starts: bool = True):
+    """Record what a route asks to scan, without running it.
+
+    The Facebook check now really does reach the Facebook source, so a test
+    that lets it run would call Apify for real.
+    """
+    scanner = application.state.scanner
+    original = scanner.start_scan
+    asked: list[tuple[str, list[str]]] = []
+
+    def stub(trigger: str = "manual", sources=None):
+        state = application.state.repository.connector_state("apify")
+        asked.append((state.state if state else None, [s.platform for s in (sources or [])]))
+        return starts
+
+    scanner.start_scan = stub
+    try:
+        yield asked
+    finally:
+        scanner.start_scan = original
 
 
 class WaitingDashboardSource:
@@ -723,7 +748,7 @@ def test_apify_token_can_be_connected_from_alerts(tmp_path: Path) -> None:
     settings = app_settings(tmp_path)
     application = create_app(settings=settings, sources=[], enable_scheduler=False)
 
-    with TestClient(application) as client:
+    with scan_requests(application), TestClient(application) as client:
         saved = client.post(
             "/alerts/apify/token",
             data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
@@ -1863,7 +1888,7 @@ def test_a_facebook_test_lands_back_on_the_card_that_started_it(tmp_path: Path) 
     settings = app_settings(tmp_path)
     application = create_app(settings=settings, sources=[], enable_scheduler=False)
 
-    with TestClient(application) as client:
+    with scan_requests(application), TestClient(application) as client:
         client.post(
             "/alerts/apify/token",
             data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
@@ -1929,7 +1954,7 @@ def test_saving_a_token_starts_the_check_without_a_second_click(tmp_path: Path) 
     settings = app_settings(tmp_path)
     application = create_app(settings=settings, sources=[], enable_scheduler=False)
 
-    with TestClient(application) as client:
+    with scan_requests(application), TestClient(application) as client:
         saved = client.post(
             "/alerts/apify/token",
             data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
@@ -1952,31 +1977,17 @@ def test_a_check_is_marked_before_it_starts_not_after(tmp_path: Path) -> None:
     itself rather than racing it."""
     settings = app_settings(tmp_path)
     application = create_app(settings=settings, sources=[], enable_scheduler=False)
-    repository = application.state.repository
-    scanner = application.state.scanner
 
-    seen: list[str | None] = []
-    original = scanner.start_scan
+    with scan_requests(application) as asked, TestClient(application) as client:
+        client.post(
+            "/alerts/apify/token",
+            data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
+            follow_redirects=False,
+        )
 
-    def spy(trigger: str = "manual", sources=None):
-        state = repository.connector_state("apify")
-        seen.append(state.state if state else None)
-        return original(trigger, sources)
-
-    scanner.start_scan = spy
-    try:
-        with TestClient(application) as client:
-            client.post(
-                "/alerts/apify/token",
-                data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
-                follow_redirects=False,
-            )
-    finally:
-        scanner.start_scan = original
-
-    assert seen == ["checking"], (
+    assert [state for state, _ in asked] == ["checking"], (
         "the connector must already read checking when the scan is handed off, "
-        f"or the scan's own result can be overwritten by it; saw {seen}"
+        f"or the scan's own result can be overwritten by it; saw {asked}"
     )
 
 
@@ -2025,3 +2036,25 @@ def test_an_abandoned_check_stops_claiming_to_be_running(tmp_path: Path) -> None
     settled = resolve_stalled_check(abandoned, now=now)
     assert settled.state == "degraded", "no longer plausible"
     assert "interrupted" in settled.message
+
+
+def test_the_facebook_check_scans_facebook_and_not_the_whole_board(tmp_path: Path) -> None:
+    """Every scan shares one time budget. Running all eighteen sources to test
+    one of them regularly cut Facebook for time, so the card reported "Not
+    checked this time" for the source the button exists to check."""
+    settings = app_settings(tmp_path)
+    application = create_app(settings=settings, sources=[], enable_scheduler=False)
+
+    with scan_requests(application) as asked, TestClient(application) as client:
+        client.post(
+            "/alerts/apify/token",
+            data={"apify_token": "apify_api_abcdefghijklmnopqrstuvwxyz123456"},
+            follow_redirects=False,
+        )
+        client.post("/alerts/apify/test", follow_redirects=False)
+
+    assert asked, "the check has to actually start a scan"
+    for _, platforms in asked:
+        assert platforms == ["Facebook Marketplace"], (
+            f"a bounded Facebook check must ask for Facebook alone; asked for {platforms}"
+        )

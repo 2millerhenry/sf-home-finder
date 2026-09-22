@@ -2143,12 +2143,18 @@ def create_app(
         return JSONResponse(support_report(request).to_dict())
 
     def _start_facebook_check(trigger: str) -> bool:
-        """Mark the check before starting it, never after.
+        """Check Facebook, and only Facebook.
 
-        The scan runs in a daemon thread and can finish before this function
-        returns. Writing "checking" after start_scan therefore overwrites the
-        result the scan just recorded, and nothing writes it again -- the card
-        is stranded on Testing until the next scheduled run.
+        This used to run the whole source set. Every scan shares one time
+        budget, so Facebook queued behind eighteen other sites and was
+        regularly cut for time -- the card reported "Not checked this time"
+        for the one source the button exists to check, which is worse than
+        no button at all.
+
+        Mark the check before starting it, never after: the scan runs in a
+        daemon thread and can finish before this function returns, and a mark
+        written afterwards overwrites the result the scan just recorded,
+        stranding the card on Testing until the next scheduled run.
         """
         previous = repository.connector_state("apify")
         repository.set_connector_state(
@@ -2158,7 +2164,7 @@ def create_app(
             configured=True,
             attempted=True,
         )
-        if scanner.start_scan(trigger):
+        if scanner.start_scan(trigger, sources=[FacebookMarketplaceSource(mailbox, apify_tokens)]):
             return True
         # A check that is not running must not be left claiming that it is.
         # The token is saved by the time this runs, so "not configured" is no
