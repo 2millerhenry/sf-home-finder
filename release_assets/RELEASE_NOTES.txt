@@ -1,3 +1,14 @@
+SF Home Finder 0.5.17
+
+Check for alerts now reports on the card you pressed it on. It used to start
+the check and then move you to the dashboard, which is not where the answer
+arrives. While the check runs the card shows real progress, and afterwards it
+says when it last ran.
+
+The four saved-search sites below it settle at the same time, and they used to
+stay stale until you reloaded the page.
+
+
 SF Home Finder 0.5.16
 
 The first Facebook check spends its hundred slots on homes inside your deal.

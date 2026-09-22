@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sf-home-finder"
-version = "0.5.16"
+version = "0.5.17"
 description = "A small local monitor for San Francisco room and housing listings"
 readme = "README.md"
 license = "MIT"
