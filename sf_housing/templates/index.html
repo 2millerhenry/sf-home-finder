@@ -269,6 +269,10 @@
             {%- if listing.price is not none -%}
             <strong>${{ "{:,}".format(listing.price) }}</strong><span>{% if housing_mode == 'two_bedroom' and listing.per_person_monthly %}${{ "{:,}".format(listing.per_person_monthly) }}/person{% else %}/mo{% endif %}</span>
             {%- if listing.price_basis == 'last_seen' %}<details class="price-basis is-last-seen"><summary>Last seen</summary><p>The rent {{ listing.platform }} showed when it last listed this home, on {{ listing.last_seen|compact_pacific_date }}.</p></details>{% endif -%}
+            {#- A rent far under what the area charges looks the same from
+                outside whether it is a scam or the find of the month. Say
+                which it might be and leave the judgement with the reader. -#}
+            {%- if listing.market_share %}<details class="price-basis is-under-market"><summary><span aria-hidden="true">&#9873;</span> {{ 100 - listing.market_share }}% under market</summary><p>{{ listing.neighborhood or 'San Francisco' }} homes this size let for about <strong>${{ "{:,}".format(listing.market_median) }}</strong>. Could be a real find, could be a scam. Open it first, and never pay before viewing.</p></details>{% endif -%}
             {%- elif listing.price_basis == 'estimated' -%}
             <strong class="is-estimate">&#8776;${{ "{:,}".format(listing.estimated_price) }}</strong><span>/mo</span>
             <details class="price-basis is-estimate"><summary>Estimated</summary><p>No site published a rent, so this is the median for homes its size in {{ listing.neighborhood or 'San Francisco' }}.</p></details>

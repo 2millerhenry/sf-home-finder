@@ -481,3 +481,47 @@ def test_movoto_runs_before_the_sources_that_fetch_a_page_per_building(
     order = [item.platform for item in scanner._eligible_sources("scheduled")]
     assert order.index("Movoto") < order.index("Apartment List")
     assert order.index("Movoto") < order.index("Rent.com")
+
+
+def test_a_floor_area_answers_the_bedroom_count_movoto_leaves_out() -> None:
+    """One Movoto home in seven publishes no bedroom count, and those homes
+    were the whole of the owner's "Other homes" tab. Movoto does publish their
+    floor area, and on its own stated homes in this city the sizes separate
+    cleanly: the uncounted ones sit at a median 454 sq ft with three-quarters
+    under 509, while one-bedrooms start at 557. That is an answer."""
+    from sf_housing.sources import _bedrooms_from_floor_area
+
+    assert _bedrooms_from_floor_area(454) == 0, "the median uncounted home is a studio"
+    assert _bedrooms_from_floor_area(509) == 0, "and so is the top of that quartile"
+    assert _bedrooms_from_floor_area(648) == 1, "the median one-bedroom"
+    assert _bedrooms_from_floor_area(1000) == 2
+    assert _bedrooms_from_floor_area(1391) == 3
+
+    # Silence wherever the area cannot mean a bedroom count.
+    assert _bedrooms_from_floor_area(None) is None
+    assert _bedrooms_from_floor_area("1,200 sq ft") is None
+    assert _bedrooms_from_floor_area(0) is None
+    assert _bedrooms_from_floor_area(4000) is None, "a house, not a bedroom count"
+    assert _bedrooms_from_floor_area(True) is None, "a bool is not an area"
+
+
+def test_a_stated_bedroom_count_is_never_overridden_by_an_estimate(preferences) -> None:
+    """The estimate exists for homes Movoto declines to count. A home whose
+    count it does publish is believed over any floor area, and must not be
+    marked as estimated."""
+    page = doctored(HARRISON, bed=2, sqftTotal=430)
+    home = by_id(found(preferences, page))[HARRISON]
+
+    assert home.metadata.get("bedrooms") == 2, "the stated count wins over 430 sq ft"
+    assert "bedrooms_basis" not in home.metadata
+
+
+def test_an_uncounted_home_is_read_from_its_floor_area_and_says_so(preferences) -> None:
+    # Movoto publishes "bed": 0 as a stated studio; the homes this is for
+    # carry no bed field at all.
+    page = doctored(HARRISON, bed=None, sqftTotal=430)
+    home = by_id(found(preferences, page))[HARRISON]
+
+    assert home.metadata.get("bedrooms") == 0, "430 sq ft is a studio"
+    assert home.metadata.get("bedrooms_basis") == "floor_area", "and is marked an estimate"
+    assert "floor area puts this at" in (home.summary or ""), "and the row says how it knows"

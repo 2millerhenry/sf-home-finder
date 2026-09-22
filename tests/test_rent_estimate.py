@@ -22,7 +22,7 @@ from sf_housing.app import create_app
 from sf_housing.database import Repository
 from sf_housing.location import canonical_neighborhood
 from sf_housing.models import ListingCandidate, ScoreResult
-from sf_housing.rent_estimate import MINIMUM_SAMPLE, RentTable, size_of
+from sf_housing.rent_estimate import MINIMUM_SAMPLE, RentTable, mark_price_basis, size_of
 from sf_housing.settings import Settings
 from tests.conftest import TEST_PREFERENCES
 
@@ -274,3 +274,40 @@ def test_an_estimate_is_not_pinned_to_a_lower_stored_score_of_a_copy_that_fits()
     order, _ = ranking_order([home, rival], {1: [a, b]}, table, lambda listing: ScoreResult(92, [], "", {}))
 
     assert [item["id"] for item in order] == [1, 2]
+
+
+def test_a_rent_far_under_the_area_is_flagged_for_the_reader() -> None:
+    """Every scam that reached the top of the owner's shortlist sat between 21%
+    and 41% of what its area charges, while clearing the $1,100 fixed floor
+    against a market of $2,800 to $4,200. The area's own figure is what catches
+    them; the fixed floor never could."""
+    table = RentTable(
+        by_area={("potrero hill", "one_bedroom"): 4242},
+        by_size={"one_bedroom": 3800},
+    )
+    rows = [
+        {"price": 900, "neighborhood": "Potrero Hill", "unit_type": "one_bedroom",
+         "housing_kind": "whole_unit", "metadata": {}},
+        {"price": 3400, "neighborhood": "Potrero Hill", "unit_type": "one_bedroom",
+         "housing_kind": "whole_unit", "metadata": {}},
+    ]
+    mark_price_basis(rows, table)
+
+    scam, fair = rows
+    assert scam["market_share"] == 21, "a fifth of what the area charges"
+    assert scam["market_median"] == 4242
+    # 80% of market is a good deal, not a warning; the flag has to stay rare
+    # enough that somebody still reads it.
+    assert fair["market_share"] is None
+
+
+def test_a_deliberately_cheap_home_is_not_doubted() -> None:
+    """The city's own portal publishes rents a third of market. Those are the
+    finds, and a warning on them would be the app doubting the best thing it
+    has."""
+    table = RentTable(by_area={}, by_size={"one_bedroom": 3800})
+    rows = [{"price": 1200, "neighborhood": "Mission District", "unit_type": "one_bedroom",
+             "housing_kind": "whole_unit", "metadata": {"below_market_rate": True}}]
+    mark_price_basis(rows, table)
+
+    assert rows[0]["market_share"] is None

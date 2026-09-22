@@ -78,6 +78,15 @@ WINDOW_DAYS = 60
 # size, and the 13 that are both are the ones the scanner opens.
 FAR_BELOW_MARKET_SHARE = 0.6
 
+# What the reader is warned about, which is a wider net than what the scanner
+# spends a page read on. Measured on the owner's own board: every scam that
+# reached the top of the shortlist sat between 21% and 41% of what its area
+# charges for that size, while clearing the $1,100 fixed floor against a market
+# of $2,800 to $4,200. At 63% every one of them is caught and 22% of the
+# shortlist carries the mark; at 70% it was 28%, which is enough of the board
+# to teach somebody to stop reading it.
+SUSPICIOUS_MARKET_SHARE = 0.63
+
 
 def _median(values: list[int]) -> int:
     ordered = sorted(values)
@@ -178,10 +187,13 @@ def mark_price_basis(listings: Iterable[dict], table: RentTable) -> None:
     """
     for item in listings:
         item["estimated_price"] = None
+        item["market_share"] = None
+        item["market_median"] = None
         if item.get("price") is not None:
             item["price_basis"] = (
                 PRICE_STATED if item.get("still_listed_by_source", True) else PRICE_LAST_SEEN
             )
+            _mark_far_below_market(item, table)
             continue
         guess = (
             None
@@ -192,6 +204,30 @@ def mark_price_basis(listings: Iterable[dict], table: RentTable) -> None:
         )
         item["estimated_price"] = guess
         item["price_basis"] = PRICE_ESTIMATED if guess is not None else PRICE_UNKNOWN
+
+
+def _mark_far_below_market(item: dict, table: RentTable) -> None:
+    """Note a rent far under what this area charges for a home this size.
+
+    A warning, never a verdict. The home keeps its place and its score: a rent
+    like this is how both a scam and the find of the month look from outside,
+    and the reader is the one who can tell them apart by opening the page.
+    What the app can do is make sure they know before they spend the minute.
+    """
+    # A home let cheaply on purpose is not a rent to doubt -- the city's own
+    # portal publishes rents a third of market, and those are the finds.
+    if (item.get("metadata") or {}).get("below_market_rate"):
+        return
+    median = estimated_rent(
+        table, item.get("neighborhood"), item.get("housing_kind"), item.get("unit_type")
+    )
+    if not median:
+        return
+    price = int(item["price"])
+    if price >= median * SUSPICIOUS_MARKET_SHARE:
+        return
+    item["market_share"] = max(1, round(price / median * 100))
+    item["market_median"] = median
 
 
 def ranking_order(listings: list[dict], copies: dict, table: RentTable, score) -> tuple[list[dict], bool]:

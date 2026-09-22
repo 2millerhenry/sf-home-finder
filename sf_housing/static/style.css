@@ -560,7 +560,10 @@ select.is-selected { background: var(--surface-muted); border-color: var(--line-
 .result-count { color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
 .listing-table-scroll { max-height: max(470px, calc(100vh - 328px)); overflow: auto; outline: 0; }
 .listing-table-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
-.listing-table { width: 100%; min-width: 1446px; table-layout: fixed; border-collapse: separate; border-spacing: 0; }
+/* min-width is the sum of the column widths below and has to be kept equal
+   to it: hold the table open any wider and the surplus is a band of empty
+   table past the last column, which is what scrolling right used to reach. */
+.listing-table { width: 100%; min-width: 1350px; table-layout: fixed; border-collapse: separate; border-spacing: 0; }
 .listing-table .cell-score { width: 76px; }
 .listing-table .cell-quick-open { width: 66px; }
 .listing-table .cell-price { width: 96px; }
@@ -688,6 +691,11 @@ select.is-selected { background: var(--surface-muted); border-color: var(--line-
 .price-basis > summary { width: fit-content; cursor: pointer; font-size: 0.6rem; font-weight: 700; line-height: 1.2; }
 .price-basis.is-last-seen > summary { color: var(--amber); }
 .price-basis.is-estimate > summary { color: var(--muted); }
+/* The one basis that asks the reader to do something before acting on it, so
+   it is the one that carries a colour you stop at. A flag rather than a cross:
+   the home may well be real, and hiding it was never the answer. */
+.price-basis.is-under-market > summary { color: var(--red); }
+.price-basis.is-under-market > p { width: 236px; border-color: var(--red-line); }
 .price-basis > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .price-basis > p { position: absolute; z-index: 5; top: calc(100% + 3px); left: 0; width: 204px; margin: 0; padding: 7px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-focus); color: var(--ink); font-size: 0.66rem; font-weight: 500; line-height: 1.36; white-space: normal; }
 /* When the source last showed this home, said beside the source's name on
@@ -1432,7 +1440,7 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
      widest column on the table, so those two give way first. Dropping both
      takes about 300px off, which is what the narrower table is set to. */
   .listing-table .cell-fit { display: none; }
-  .listing-table { min-width: 1250px; }
+  .listing-table { min-width: 1148px; }  /* 1350 - 202, the column just hidden */
   .listing-compact-meta .meta-found { display: inline; }
 }
 
@@ -1812,11 +1820,19 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
 
 /* Real progress from the scan itself: a share of the work done and the time
    left, rather than an animation that only signals "something". */
-.conn-progress { display: grid; gap: 7px; }
+/* The bar ran the full width of the card while every line around it stopped
+   at the reading measure, which read as one element escaping the layout. */
+.conn-progress { display: grid; gap: 7px; max-width: 74ch; }
 .conn-bar { height: 5px; border-radius: 999px; background: var(--surface-muted); overflow: hidden; }
 .conn-bar span { display: block; width: 0%; height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.4s ease; }
-.conn-progress-label { display: flex; justify-content: space-between; gap: 12px; color: var(--muted) !important; font-size: 0.78rem !important; }
-.conn-elapsed { font-variant-numeric: tabular-nums; }
+/* What is being read on the left, how far along on the right. Spacing the
+   three apart put the share in the middle of the row, reading as a third
+   unrelated thing rather than as the answer to the bar above it. */
+.conn-progress-label { display: flex; align-items: baseline; gap: 8px; max-width: none !important; color: var(--muted) !important; font-size: 0.78rem !important; }
+.conn-progress-label > span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A share and a time, in figures that do not reflow as they count. */
+.conn-elapsed { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.conn-percent { flex: 0 0 auto; color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
 
 .conn-about { margin-top: 2px; }
 .conn-about > summary { min-height: 34px; display: inline-flex; align-items: center; cursor: pointer; color: var(--accent-hover); font-size: 0.79rem; font-weight: 650; }

@@ -309,6 +309,21 @@ def sf_target_coordinate_neighborhood(latitude: object, longitude: object) -> st
     return None
 
 
+# Facebook's location line for a card outside the six target areas is a
+# postcode and a map pin: "San Francisco CA 94121-3203 37.77208 -122.50705".
+# Printed as the home's area -- which is what fell out of the chain below --
+# it is unreadable and says less than the two words inside it.
+_COORDINATE_BLOB = re.compile(r"\b\d{5}(?:-\d{4})?\b|-?\d{2,3}\.\d{3,}")
+
+
+def _readable_sf_area(location: str | None) -> str | None:
+    """A place name from Facebook's location line, or nothing."""
+    text = _COORDINATE_BLOB.sub(" ", str(location or ""))
+    text = re.sub(r"\bCA\b", " ", text)
+    text = _clean_text(re.sub(r"\s+", " ", text).strip(" ,-"), 60)
+    return text or None
+
+
 def facebook_coordinate_neighborhood(location: str | None) -> str | None:
     """Return a target area when Facebook's coordinate-only pin is unambiguous."""
     match = re.search(r"\b(37\.\d{4,})\s+(-122\.\d{4,})\b", location or "")
@@ -3162,6 +3177,33 @@ class TruliaSource:
         )
 
 
+# Calibrated on Movoto's own stated homes in this city, which is the only
+# sample that shares its measuring habits: studios (the homes it declines to
+# count) sit at a median 454 sq ft with three-quarters under 509, one-bedrooms
+# at 648 with a quarter under 557, two-bedrooms at 1,000, three at 1,391. The
+# boundaries below are the midpoints between those medians, so a home is read
+# as whichever size its area is nearest to.
+_FLOOR_AREA_BEDROOMS = ((550, 0), (820, 1), (1195, 2), (1645, 3))
+
+
+def _bedrooms_from_floor_area(area: object) -> int | None:
+    """How many bedrooms a floor area implies, or nothing.
+
+    An estimate, and marked as one by every caller: a source that states a
+    count is always believed over this. Silence is the answer wherever the
+    area is missing or too far outside the range the sample covers to mean
+    anything -- a 4,000 sq ft home is not a bedroom count, it is a house.
+    """
+    if isinstance(area, bool) or not isinstance(area, (int, float)):
+        return None
+    if not 150 <= float(area) <= 2600:
+        return None
+    for boundary, bedrooms in _FLOOR_AREA_BEDROOMS:
+        if float(area) < boundary:
+            return bedrooms
+    return 4
+
+
 class MovotoSource:
     """Read the individual San Francisco homes Movoto has out to let.
 
@@ -3347,10 +3389,20 @@ class MovotoSource:
             metadata["bedrooms"] = bedrooms
             detail.append(f"Listed as {_bedroom_phrase(bedrooms)}.")
         else:
-            # Roughly one home in seven publishes no bedroom count. Said out
-            # loud rather than defaulted to a studio, which is what an
-            # unstated count silently becomes wherever zero is the fallback.
-            detail.append("Movoto does not state how many bedrooms this home has.")
+            # Roughly one home in seven publishes no bedroom count. Never
+            # defaulted to a studio -- that is what an unstated count silently
+            # becomes wherever zero is the fallback -- but the floor area it
+            # does publish answers the question well enough to say so out loud.
+            estimated = _bedrooms_from_floor_area(home.get("sqftTotal"))
+            if estimated is None:
+                detail.append("Movoto does not state how many bedrooms this home has.")
+            else:
+                metadata["bedrooms"] = estimated
+                metadata["bedrooms_basis"] = "floor_area"
+                detail.append(
+                    f"Movoto does not state the bedrooms; its floor area puts this at "
+                    f"{_bedroom_phrase(estimated)}."
+                )
 
         baths = home.get("bath")
         if isinstance(baths, (int, float)) and not isinstance(baths, bool) and baths > 0:
@@ -5137,7 +5189,7 @@ class ApifyFacebookMarketplaceSource:
                     neighborhood=(
                         GmailHousingAlertSource._neighborhood(context, preferences)
                         or coordinate_neighborhood
-                        or location
+                        or _readable_sf_area(location)
                         or None
                     ),
                     listing_type="Marketplace rental",

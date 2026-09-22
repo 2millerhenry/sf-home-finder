@@ -167,7 +167,12 @@ def test_the_scan_takes_about_as_long_as_its_slowest_lane(
     elapsed = time.monotonic() - started
 
     assert outcome.status == "completed"
-    assert elapsed < 1.6, f"took {elapsed:.2f}s -- the lanes ran one after the other"
+    # 1.8 rather than 1.6. Measured ten times on an idle machine this runs in
+    # 1.13 to 1.31 seconds, and in turn it would take 2.0; the bound only has
+    # to fall between those. At 1.6 it was close enough to the upper end that a
+    # full suite's jitter tripped it intermittently, which is a failure that
+    # teaches people to re-run rather than to look.
+    assert elapsed < 1.8, f"took {elapsed:.2f}s -- the lanes ran one after the other"
 
 
 @pytest.mark.parametrize(

@@ -68,17 +68,22 @@
       if (!box) return;
       var fill = box.querySelector("[data-progress-fill]");
       var text = box.querySelector("[data-progress-text]");
+      var share = box.querySelector("[data-progress-percent]");
       var clock = box.querySelector("[data-progress-elapsed]");
-      var percent = Math.max(4, Math.min(100, Number(progress.percent) || 0));
+      // A sliver at the start, so the bar reads as started rather than stuck
+      // without claiming progress that has not happened.
+      var percent = Math.max(3, Math.min(100, Math.round(Number(progress.percent) || 0)));
       if (fill) fill.style.width = percent + "%";
-      if (text) {
-        text.textContent = progress.current_source
-          ? "Reading " + progress.current_source + "…"
-          : "Checking Facebook…";
+      // Each card writes its own waiting line -- reading an inbox is not
+      // checking a bridge -- so only a real source name replaces it.
+      if (text && progress.current_source) {
+        text.textContent = "Reading " + progress.current_source + "…";
       }
+      if (share) share.textContent = percent + "%";
       if (clock) {
         var elapsed = Math.max(0, Math.round(Number(progress.elapsed_seconds) || 0));
-        clock.textContent = progress.remaining_label || (elapsed + "s");
+        var label = progress.remaining_label || (elapsed + "s");
+        clock.textContent = label ? "· " + label : "";
       }
     });
   }

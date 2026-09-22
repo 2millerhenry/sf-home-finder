@@ -161,7 +161,7 @@
     {% endif %}
     <div class="conn-progress" data-connector-progress="gmail" hidden>
       <div class="conn-bar"><span data-progress-fill></span></div>
-      <p class="conn-progress-label"><span data-progress-text>Reading your inbox…</span><span class="conn-elapsed" data-progress-elapsed></span></p>
+      <p class="conn-progress-label"><span data-progress-text>Reading your inbox…</span><span class="conn-percent" data-progress-percent></span><span class="conn-elapsed" data-progress-elapsed></span></p>
     </div>
     <p class="conn-sub" data-connector-when="gmail"{% if not (gmail_state and gmail_state.last_attempt_at) %} hidden{% endif %}>{% if gmail_state and gmail_state.last_attempt_at %}Last checked {{ gmail_state.last_attempt_at | pacific_datetime }}{% if gmail_state.observed_items %} &middot; {{ gmail_state.observed_items }} imported in total{% endif %}{% endif %}</p>
     <div class="connect-actions">
@@ -398,7 +398,7 @@
          looks busy: it reports the source being read and the time left. #}
       <div class="conn-progress" data-connector-progress="apify" hidden>
         <div class="conn-bar"><span data-progress-fill></span></div>
-        <p class="conn-progress-label"><span data-progress-text>Starting the check…</span><span class="conn-elapsed" data-progress-elapsed></span></p>
+        <p class="conn-progress-label"><span data-progress-text>Starting the check…</span><span class="conn-percent" data-progress-percent></span><span class="conn-elapsed" data-progress-elapsed></span></p>
       </div>
 
       <div class="conn-row">
@@ -433,7 +433,7 @@
       <p class="conn-note" data-connector-next-step="facebook_groups"{% if not (facebook_groups_state and facebook_groups_state.needs_action) %} hidden{% endif %}>{{ facebook_groups_state.next_step if facebook_groups_state else '' }}</p>
       <div class="conn-progress" data-connector-progress="facebook_groups" hidden>
         <div class="conn-bar"><span data-progress-fill></span></div>
-        <p class="conn-progress-label"><span data-progress-text>Reading your groups…</span><span class="conn-elapsed" data-progress-elapsed></span></p>
+        <p class="conn-progress-label"><span data-progress-text>Reading your groups…</span><span class="conn-percent" data-progress-percent></span><span class="conn-elapsed" data-progress-elapsed></span></p>
       </div>
       {% if facebook_groups %}
         <ul class="conn-group-list">
@@ -470,7 +470,7 @@
 
       <div class="conn-progress" data-connector-progress="furnished_finder" hidden>
         <div class="conn-bar"><span data-progress-fill></span></div>
-        <p class="conn-progress-label"><span data-progress-text>Checking the bridge…</span><span class="conn-elapsed" data-progress-elapsed></span></p>
+        <p class="conn-progress-label"><span data-progress-text>Checking the bridge…</span><span class="conn-percent" data-progress-percent></span><span class="conn-elapsed" data-progress-elapsed></span></p>
       </div>
 
       <div class="conn-row">

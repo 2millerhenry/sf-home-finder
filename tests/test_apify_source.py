@@ -221,3 +221,18 @@ def test_every_feed_carries_the_price_band_and_asks_for_the_newest(tmp_path, pre
     for url in starts:
         assert "minPrice=750" in url and "maxPrice=9375" in url, url
         assert "sortBy=creation_time_descend" in url, "newest first, on every feed"
+
+
+def test_a_map_pin_is_not_printed_as_the_area() -> None:
+    """Facebook's location line for a card outside the six target areas is a
+    postcode and a pin: "San Francisco CA 94121-3203 37.77208 -122.50705". That
+    reached the board's Area column verbatim, where it is unreadable and says
+    less than the two words buried inside it."""
+    from sf_housing.sources import _readable_sf_area
+
+    assert _readable_sf_area("San Francisco CA 94121-3203 37.77208 -122.50705") == "San Francisco"
+    assert _readable_sf_area("San Francisco CA 94103 37.78415 -122.40161") == "San Francisco"
+    # A real place name survives untouched; this only strips the machinery.
+    assert _readable_sf_area("Bernal Heights, San Francisco") == "Bernal Heights, San Francisco"
+    assert _readable_sf_area("") is None
+    assert _readable_sf_area(None) is None
