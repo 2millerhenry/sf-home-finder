@@ -6,7 +6,7 @@
    `expanded` is the difference between the two: a page devoted to one home has
    room for every reason and every question, a list of several does not. #}
 
-{% macro listing_card(listing, return_to, expanded=false) %}
+{% macro listing_card(listing, return_to, expanded=false, star_in_place=true) %}
 <div class="listing-card{% if listing.opened_at %} opened-listing{% endif %}">
   <div class="saved-head">
     <p class="saved-facts">
@@ -43,7 +43,7 @@
   <div class="saved-evidence">
     <div>
       <h4>Why it fits</h4>
-      {% set reasons = listing.match_reasons if expanded else listing.match_reasons[:3] %}
+      {% set reasons = listing.match_reasons if expanded else listing.match_reasons[:2] %}
       {% if reasons %}<ul>{% for reason in reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% else %}<p class="unknown">Not enough listing detail yet.</p>{% endif %}
     </div>
     <div>
@@ -55,8 +55,8 @@
   </div>
   <form class="saved-note" method="post" action="/listings/{{ listing.id }}/note">
     <input type="hidden" name="return_to" value="{{ return_to }}">
-    <label for="saved-note-{{ listing.id }}">Your note</label>
-    <textarea id="saved-note-{{ listing.id }}" name="note" maxlength="4000" rows="{% if expanded %}3{% else %}2{% endif %}" placeholder="Tour time, who you spoke to, questions to ask…">{{ listing.note }}</textarea>
+    <label class="{% if expanded %}saved-note-label{% else %}sr-only{% endif %}" for="saved-note-{{ listing.id }}">Your note</label>
+    <textarea id="saved-note-{{ listing.id }}" name="note" maxlength="4000" rows="{% if expanded %}3{% elif listing.note %}2{% else %}1{% endif %}" placeholder="Tour time, who you spoke to, questions to ask…">{{ listing.note }}</textarea>
     <button type="submit">Save note</button>
   </form>
   <div class="saved-actions">
@@ -75,7 +75,9 @@
     </details>
     {# The same two controls the results table uses, so a home reads the same
        way whichever surface someone acts on it from. #}
-    <form method="post" action="/listings/{{ listing.id }}/status">
+    {#- In place unless the page would have to lose this card: on the starred
+        list, un-starring removes it, and only a reload can honestly show that. -#}
+    <form method="post" action="/listings/{{ listing.id }}/status"{% if star_in_place %} data-star-form{% endif %}>
       <input type="hidden" name="return_to" value="{{ return_to }}">
       <input type="hidden" name="status" value="{% if listing.status == 'saved' %}active{% else %}saved{% endif %}">
       <button class="save-button{% if listing.status == 'saved' %} saved{% endif %}" type="submit" aria-label="{% if listing.status == 'saved' %}Remove from starred listings{% else %}Add to starred listings{% endif %}">{% if listing.status == 'saved' %}★ Starred{% else %}☆ Star{% endif %}</button>

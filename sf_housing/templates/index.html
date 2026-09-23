@@ -201,7 +201,7 @@
      truncated, the note is always open, and the contact action leads. #}
   <ol class="saved-list">
     {% for listing in listings %}
-    <li>{{ listing_card(listing, return_to) }}</li>
+    <li>{{ listing_card(listing, return_to, star_in_place=false) }}</li>
     {% endfor %}
   </ol>
   {% else %}
@@ -362,7 +362,11 @@
           </td>
           <td class="cell-actions">
             <div class="row-actions">
-              <form method="post" action="/listings/{{ listing.id }}/status">
+              {#- Flipped in place by listing-actions.js rather than posted and
+                  redirected: starring does not change which homes belong on
+                  this page, and rebuilding the list to fill in one star cost
+                  about three seconds of nothing happening. -#}
+              <form method="post" action="/listings/{{ listing.id }}/status" data-star-form>
                 <input type="hidden" name="return_to" value="{{ return_to }}">
                 <input type="hidden" name="status" value="{% if listing.status == 'saved' %}active{% else %}saved{% endif %}">
                 <button class="row-action save-button{% if listing.status == 'saved' %} saved{% endif %}" type="submit" aria-label="{% if listing.status == 'saved' %}Remove from starred listings{% else %}Add to starred listings{% endif %}">{% if listing.status == 'saved' %}★ Starred{% else %}☆ Star{% endif %}</button>
@@ -471,6 +475,19 @@
     </ul>
     <p><a href="/preferences">Widen your deal</a> or <a href="/?housing={{ housing_mode }}&amp;view=all&amp;sort=score">see them in the full archive</a>.</p>
   </details>
+  {% endif %}
+  {% if listings and view == 'near_matches' %}
+  {#- The end of the last list there is anywhere to look. The shortlist's own
+      footer sends people here; this one has to send them somewhere in turn,
+      or near matches is where the board stops. Two ways on: the homes no size
+      tab claims, and the deal that decided all of it. -#}
+  <div class="near-footer">
+    <p>Still couldn&rsquo;t find what you were looking for?</p>
+    <div class="near-footer-actions">
+      {% if show_other_tab %}<a class="near-pill" href="/?housing=other&amp;view=active&amp;sort=score">Check other homes</a>{% endif %}
+      <a class="near-pill" href="/preferences">Update your deal</a>
+    </div>
+  </div>
   {% endif %}
 </section>
 

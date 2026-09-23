@@ -1438,3 +1438,127 @@ def test_revealing_the_optional_column_keeps_the_cell_a_grid() -> None:
 
     assert ".money-cell { min-width: 0; display: grid;" in style
     assert ".path-ledger.show-ranges .money-cell.is-optional { display: grid; }" in style
+
+
+def preview_form() -> dict[str, object]:
+    """A deal mid-edit: one size priced, a second ticked and still blank."""
+    return {
+        "housing_paths": ["one_bedroom", "studio"],
+        "one_bedroom_maximum": "3200",
+        "areas_dream": ["Castro"],
+        "minimum_score": "55",
+    }
+
+
+def test_a_second_size_ticked_before_its_price_still_previews(tmp_path: Path) -> None:
+    """Ticking a size with the price still blank used to 500 the preview.
+
+    ``legacy_view`` read the ticked whole-home paths for ``path_maximums`` and
+    the priced ones everywhere else, so the moment a draft held one of each it
+    raised ``KeyError``. The browser drops a failed preview, which left the
+    review sentence frozen and the shortlist count with it -- a page that had
+    stopped answering while looking exactly like a page that had answered.
+    """
+    application = create_app(settings=settings_for(tmp_path), sources=[], enable_scheduler=False)
+
+    with TestClient(application) as client:
+        response = client.post("/preferences/deal/preview", data=preview_form())
+
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is True
+
+
+def test_the_review_sentence_names_a_size_that_has_no_price_yet() -> None:
+    """The one answer that stops a save has to be visible before the save."""
+    profile = deal_profile_from_form(MultiForm(preview_form()), state="draft")
+    sentence = profile.summary()
+
+    assert "1-bedrooms up to $3,200" in sentence
+    assert "Studios are ticked without a monthly maximum" in sentence
+
+
+def test_the_review_sentence_names_every_area_rather_than_the_first_four() -> None:
+    """Truncating at four silently dropped areas the deal still searched."""
+    form = dict(preview_form())
+    form["studio_maximum"] = "2900"
+    form["areas_dream"] = ["Castro", "Duboce Triangle", "Mission District", "Bernal Heights", "Noe Valley"]
+    form["areas_strong"] = ["Hayes Valley"]
+    form["areas_okay"] = ["Outer Sunset"]
+    form["areas_avoid"] = ["Tenderloin"]
+    sentence = deal_profile_from_form(MultiForm(form), state="draft").summary()
+
+    assert "Noe Valley" in sentence, "the fifth dream area is part of this deal"
+    # The groups only set the order, so the sentence says the order.
+    assert "Prioritize Castro, Duboce Triangle, Mission District, Bernal Heights and Noe Valley." in sentence
+    assert "Then Hayes Valley. Then Outer Sunset." in sentence
+    assert "Tenderloin stays in near matches" in sentence
+
+
+def test_the_review_sentence_covers_timing_lease_and_household() -> None:
+    """Every answer that moves a home between the shortlist and near matches."""
+    form = dict(preview_form())
+    form["studio_maximum"] = "2900"
+    form["earliest_move_in"] = "2099-10-01"
+    form["preferred_by"] = "2099-11-15"
+    form["lease_min_months"] = "6"
+    form["lease_max_months"] = "12"
+    form["household_maximum"] = "3"
+    form["preference_laundry"] = "important"
+    sentence = deal_profile_from_form(MultiForm(form), state="draft").summary()
+
+    assert "Move in no earlier than 1 October 2099, ideally by 15 November 2099." in sentence
+    assert "Leases of 6 to 12 months." in sentence
+    assert "no more than 3 people in total" in sentence
+    assert "Important: laundry." in sentence
+
+
+def test_a_half_finished_deal_replaces_the_sentence_instead_of_freezing_it(tmp_path: Path) -> None:
+    """An unanswerable form says which answer is missing.
+
+    Leaving the previous sentence up, with nothing marking it as old, describes
+    a deal the person has already changed.
+    """
+    application = create_app(settings=settings_for(tmp_path), sources=[], enable_scheduler=False)
+    form = dict(preview_form())
+    form["areas_okay"] = ["Castro"]  # already in dream, which no deal may do
+
+    with TestClient(application) as client:
+        response = client.post("/preferences/deal/preview", data=form)
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["ok"] is False
+    # Named the way the form names the columns, not by their stored keys.
+    assert body["reason"] == "Castro appears in both Dream and Secondary. Choose one area priority."
+
+    script = (Path(__file__).resolve().parent.parent / "sf_housing" / "static" / "deal-form.js").read_text()
+    assert 'summaryTarget.textContent = data.reason' in script
+    assert '{ ok: false, failed: true }' in script, "a failed request must not read as a fresh answer"
+    style = (Path(__file__).resolve().parent.parent / "sf_housing" / "static" / "style.css").read_text()
+    assert ".deal-summary.is-blocked" in style
+
+
+def test_an_avoided_area_is_actually_read_when_scoring() -> None:
+    """The Avoid column promises that known listings stay out.
+
+    Nothing read ``avoided_neighborhoods``; an avoided area was kept out only by
+    falling through the wanted lists, which stopped covering it as soon as the
+    location was generic and only the prose named the area.
+    """
+    document = yaml.safe_load(TEST_PREFERENCES)
+    document["avoided_neighborhoods"] = ["Tenderloin"]
+    preferences = parse_preferences(yaml.safe_dump(document))
+    listing = ListingCandidate(
+        "Example",
+        "avoided",
+        "Private room in the Tenderloin",
+        "https://example.test/avoided",
+        price=1500,
+        neighborhood="San Francisco",
+        summary="A private room in a shared home, available now.",
+    )
+
+    result = score_listing(listing, preferences)
+
+    assert result.eligibility == "ineligible"
+    assert any("avoid list" in reason for reason in result.eligibility_reasons), result.eligibility_reasons

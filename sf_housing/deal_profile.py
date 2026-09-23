@@ -22,6 +22,10 @@ DEFAULT_PER_PERSON = {"two_bedroom": 2700, "three_bedroom": 2500, "four_bedroom"
 BEDROOM_PATHS = {2: "two_bedroom", 3: "three_bedroom", 4: "four_bedroom"}
 
 AREA_TIERS = ("dream", "strong", "okay", "avoid")
+# What the form calls each group. Stored keys and shown names have to agree
+# wherever a message names a group, or the page asks you to fix a column that
+# is not on it.
+AREA_TIER_LABELS = {"dream": "Dream", "strong": "Strong", "okay": "Secondary", "avoid": "Avoid"}
 IMPORTANCE_LEVELS = {"must_have", "important", "nice", "ignore", "avoid"}
 
 # Names shown in the normal form. Sources still normalize aliases separately,
@@ -94,6 +98,47 @@ class DealProfileError(ValueError):
 
 def _clean_strings(values: Iterable[object]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
+def _join_plainly(items: list[str]) -> str:
+    """A, B and C -- the way somebody reads a list aloud."""
+    items = [item for item in items if item]
+    if len(items) <= 1:
+        return items[0] if items else ""
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _plain_date(value: str) -> str:
+    """1 October rather than 2026-10-01, and the raw value if it will not parse.
+
+    The review sentence is read, not queried, and a half-typed date arrives here
+    from every keystroke in a date field.
+    """
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return value
+    # The year only when it is not the year the reader is already in: "1 October
+    # 2026" in 2026 is three words to say "soon".
+    day = f"{parsed.day} {parsed.strftime('%B')}"
+    return day if parsed.year == date.today().year else f"{day} {parsed.year}"
+
+
+def _plain_lease(minimum: int | None, maximum: int | None) -> str:
+    """What the lease answers mean, or nothing at all when neither was set."""
+
+    def months(count: int) -> str:
+        return f"{count} month" if count == 1 else f"{count} months"
+
+    if minimum and maximum:
+        if minimum == maximum:
+            return f"Leases of exactly {months(minimum)}."
+        return f"Leases of {minimum} to {months(maximum)}."
+    if minimum:
+        return f"Leases of at least {months(minimum)}."
+    if maximum:
+        return f"Leases of at most {months(maximum)}."
+    return ""
 
 
 def _shared_unit_ceiling(profile: DealProfile) -> int | None:
@@ -247,7 +292,8 @@ class DealProfile:
                 previous = normalized_areas.get(key)
                 if previous:
                     raise DealProfileError(
-                        f"{area} appears in both {previous} and {tier}. Choose one area priority."
+                        f"{area} appears in both {AREA_TIER_LABELS[previous]} and "
+                        f"{AREA_TIER_LABELS[tier]}. Choose one area priority."
                     )
                 normalized_areas[key] = tier
         if should_be_complete and not self.anywhere_in_sf and not any(
@@ -277,6 +323,15 @@ class DealProfile:
             raise DealProfileError("Unknown preference importance: " + ", ".join(sorted(unknown_importance)))
 
     def summary(self) -> str:
+        """The whole deal in plain English, as the form holds it right now.
+
+        Every answer that changes what reaches the shortlist belongs here. The
+        review section is read as the last check before saving, so anything it
+        leaves out is an answer somebody has to scroll back up to find -- and a
+        size ticked with the price still blank used to be invisible in it
+        entirely, which made the save afterwards refuse for a reason the review
+        had never mentioned.
+        """
         labels = {
             "private_room": "private rooms",
             "studio": "studios",
@@ -286,9 +341,13 @@ class DealProfile:
             "four_bedroom": "4-bedroom splits",
         }
         parts: list[str] = []
+        unpriced: list[str] = []
         for path in self.enabled_paths:
             budget = self.budgets.get(path)
             if budget is None:
+                # Ticked, with the price still blank. Named below rather than
+                # dropped: it is the one answer that stops a deal saving.
+                unpriced.append(labels[path])
                 continue
             if path in SPLIT_PATHS:
                 parts.append(
@@ -297,16 +356,66 @@ class DealProfile:
                 )
             else:
                 parts.append(f"{labels[path]} up to ${budget.maximum_monthly:,}")
+
+        sentences: list[str] = []
+        if parts:
+            sentences.append("Look for " + "; ".join(parts) + ".")
+        if unpriced:
+            # Every size label is already plural, so the verb is too however
+            # many are listed.
+            sentences.append(
+                _join_plainly(unpriced).capitalize()
+                + " are ticked without a monthly maximum, so nothing is searched "
+                "for them until you set one."
+            )
         if not parts:
-            return "Your deal is still a draft. Choose a home type, budget, and area to begin."
+            if not unpriced:
+                return "Your deal is still a draft. Choose a home type, budget, and area to begin."
+            return " ".join(sentences)
+
         if self.anywhere_in_sf:
-            area_text = "anywhere in San Francisco"
+            sentences.append("Any San Francisco neighborhood counts.")
         else:
-            named = list(self.areas.get("dream", ())) + list(self.areas.get("strong", ()))
-            area_text = ", ".join(named[:4]) or "your selected SF areas"
-        sentence = "Look for " + "; ".join(parts) + f". Prioritize {area_text}."
+            # Named in full. Truncating at four silently dropped a fifth Dream
+            # area from the description of a deal that still searched for it.
+            ranked = [
+                _join_plainly(list(self.areas.get(tier, ())))
+                for tier in ("dream", "strong", "okay")
+            ]
+            wanted = [text for text in ranked if text]
+            # A sentence each, because chaining fifteen names through two
+            # "then"s is one breath nobody takes. The full stops also show
+            # where one group ends and the next begins.
+            for position, text in enumerate(wanted):
+                sentences.append(("Prioritize " if position == 0 else "Then ") + text + ".")
+            avoid = list(self.areas.get("avoid", ()))
+            if avoid:
+                verb = "stays" if len(avoid) == 1 else "stay"
+                sentences.append(
+                    f"{_join_plainly(avoid)} {verb} in near matches, whatever else fits."
+                )
+
+        if self.move_in_flexible:
+            sentences.append("Move whenever the right place comes up.")
+        else:
+            earliest = _plain_date(self.earliest_move_in) if self.earliest_move_in else ""
+            wanted_by = _plain_date(self.preferred_by) if self.preferred_by else ""
+            if earliest and wanted_by:
+                sentences.append(f"Move in no earlier than {earliest}, ideally by {wanted_by}.")
+            elif earliest:
+                sentences.append(f"Move in no earlier than {earliest}.")
+            elif wanted_by:
+                sentences.append(f"Be in by {wanted_by}, ideally.")
+
+        lease = _plain_lease(self.lease_min_months, self.lease_max_months)
+        if lease:
+            sentences.append(lease)
+        if self.household_maximum:
+            sentences.append(f"In a shared home, no more than {self.household_maximum} people in total.")
+
         important = [name.replace("_", " ") for name, level in self.preferences.items() if level == "important"]
         nice = [name.replace("_", " ") for name, level in self.preferences.items() if level == "nice"]
+        sentence = " ".join(sentences)
         if important:
             sentence += " Important: " + ", ".join(important) + "."
         if nice:
@@ -565,8 +674,19 @@ def legacy_view(profile: DealProfile, technical: Mapping[str, Any] | None = None
         if room.minimum_monthly is not None:
             result["budget"]["min_monthly"] = room.minimum_monthly
 
-    whole_paths = [path for path in ("studio", "one_bedroom") if path in profile.enabled_paths]
-    whole_budgets = [profile.budgets[path] for path in whole_paths if path in profile.budgets]
+    # Only the paths that have a budget: a draft is allowed to hold a ticked
+    # size with the price still blank, and every line below reads a budget. The
+    # ceiling, the unit types and the per-path maximums have to agree on which
+    # paths they are describing -- one of them reading the ticked list while the
+    # others read the priced list crashed the live preview with a KeyError the
+    # moment a second size was ticked, which froze the review sentence and the
+    # shortlist count behind it until a price was typed.
+    whole_paths = [
+        path
+        for path in ("studio", "one_bedroom")
+        if path in profile.enabled_paths and path in profile.budgets
+    ]
+    whole_budgets = [profile.budgets[path] for path in whole_paths]
     if whole_budgets:
         # Existing adapters accept one whole-unit ceiling. Use the highest
         # acceptable cap for collection; scoring checks the path-specific cap.

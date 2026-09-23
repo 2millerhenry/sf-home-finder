@@ -477,7 +477,8 @@ def _neighborhood(listing: ListingCandidate, preferences: Preferences) -> Criter
     ideal = preferences.list_value("ideal_neighborhoods")
     preferred = preferences.list_value("preferred_neighborhoods")
     acceptable = preferences.list_value("acceptable_neighborhoods")
-    configured = bool(ideal or preferred or acceptable)
+    avoided = preferences.list_value("avoided_neighborhoods")
+    configured = bool(ideal or preferred or acceptable or avoided)
     outside_area = declared_outside_sf_url_hint(listing.original_url) or declared_outside_sf_area_hint(
         " ".join(filter(None, [listing.title, listing.summary]))
     )
@@ -546,6 +547,21 @@ def _neighborhood(listing: ListingCandidate, preferences: Preferences) -> Criter
     else:
         detail = _normal(" ".join(filter(None, [listing.neighborhood, listing.title, listing.summary])))
 
+    # The Avoid column, read at last. It was written into the preference file
+    # and never looked at again, so the form's promise that known listings there
+    # stay out was kept only by accident -- an avoided area fell through to the
+    # same "outside your areas" ending as an area nobody had mentioned. That
+    # accident stopped covering it whenever the location was generic and only
+    # the prose named the area, where the fall-through answered "unknown"
+    # instead. Checked first, and against the same text, because an area
+    # somebody typed under Avoid should beat a loose match in a wanted list.
+    avoided_match = matches(detail, avoided)
+    if avoided_match:
+        return Criterion(
+            "neighborhood", 0.0, True, True, None, "",
+            f"{avoided_match} is on your avoid list.",
+            match_label=avoided_match,
+        )
     ideal_match = matches(detail, ideal)
     preferred_match = matches(detail, preferred)
     acceptable_match = matches(detail, acceptable)

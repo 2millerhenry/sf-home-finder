@@ -1422,6 +1422,7 @@ def create_app(
 
     @application.post("/listings/{listing_id}/status")
     def listing_status(
+        request: Request,
         listing_id: int,
         status: str = Form(...),
         return_to: str = Form("/"),
@@ -1435,6 +1436,13 @@ def create_app(
             raise HTTPException(status_code=404, detail="Listing not found")
         if aged_out:
             score_again(listing_id)
+        # Starring a home does not change which homes belong on the page, so
+        # the board asks for the answer on its own and repaints one button.
+        # The redirect below rebuilt and re-rendered a list of hundreds to
+        # change a star to a filled one, which took about three seconds, and
+        # for three seconds nothing on screen said the star had registered.
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"status": status})
         return RedirectResponse(_safe_return(return_to), status_code=303)
 
     @application.post("/listings/{listing_id}/note")
@@ -1638,10 +1646,18 @@ def create_app(
         from the same code that writes it -- rebuilding that sentence in the
         browser would be two descriptions of one deal, free to disagree.
         """
+        form = await request.form()
         try:
-            profile = deal_profile_from_form(await request.form(), state="draft")
+            profile = deal_profile_from_form(form, state="draft")
         except (DealProfileError, ValueError) as exc:
             return JSONResponse({"ok": False, "reason": str(exc)}, status_code=200)
+
+        # The sentence costs nothing to write; the count below rescores every
+        # stored home, which is seconds on a full pool. Asked for separately,
+        # the description keeps up with typing instead of queueing behind an
+        # answer to a different question.
+        if str(form.get("counts", "")) == "0":
+            return JSONResponse({"ok": True, "summary": profile.summary()})
 
         current = load_preferences(active_settings.preferences_path)
 

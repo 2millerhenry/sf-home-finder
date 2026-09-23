@@ -767,7 +767,14 @@ button.row-action { display: inline-flex; }
 .row-action:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
 .row-open { display: inline-flex; align-items: center; justify-content: center; background: var(--accent); border-color: var(--accent); color: var(--surface); }
 .row-open:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--surface); }
-.save-button.saved { background: var(--accent-soft); color: var(--accent-hover); border-color: var(--accent-line); }
+/* Filled, and a shade darker than the Open button beside it. A starred row is
+   already tinted with --accent-soft, so a button in the same --accent-soft was
+   the one control on the page that disappeared exactly when it turned on. */
+.save-button.saved { background: var(--accent-hover); color: var(--surface); border-color: var(--accent-hover); font-weight: 660; }
+.save-button.saved:hover { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+/* A star the server refused. Said next to the button that went back, because
+   a star that silently failed is worse than a slow one. */
+.star-failed { align-self: center; color: var(--red); font-size: 0.68rem; font-weight: 640; }
 .quiet-button { color: var(--muted); background: var(--surface); }
 .table-note { position: relative; }
 .table-note > summary { display: flex; align-items: center; justify-content: center; cursor: pointer; list-style: none; }
@@ -795,6 +802,12 @@ button.row-action { display: inline-flex; }
 .why-short ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 0.84rem; line-height: 1.5; }
 .why-short ul b { font-weight: 680; font-variant-numeric: tabular-nums; }
 .why-short p { margin: 12px 0 0; font-size: 0.82rem; }
+
+/* The end of near matches, built like the end of the shortlist: what is being
+   asked on the left, the ways on at the right. */
+.near-footer { margin: 14px 0 0; padding: 12px 16px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.near-footer p { margin: 0; color: var(--muted); font-size: 0.82rem; }
+.near-footer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* Why an empty shortlist is empty. Quiet: it is an explanation, not an alarm,
    and the two ways out sit right under it. */
@@ -1158,6 +1171,9 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
 .preference-option input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
 .review-section { background: var(--tint); }
 .deal-summary { margin: 0; padding: 16px 18px; border: 1px solid var(--accent-line); border-radius: 12px; background: var(--surface); color: var(--ink); font-size: 0.92rem; font-weight: 570; line-height: 1.6; }
+/* The sentence cannot describe the form right now. Amber rather than red:
+   a half-filled answer is a normal step through this page, not a fault. */
+.deal-summary.is-blocked { border-color: var(--amber-line); background: var(--amber-soft); color: var(--amber-ink); }
 .deal-consequences { margin-top: 12px; color: var(--muted); font-size: 0.76rem; }
 .deal-consequences summary { cursor: pointer; color: var(--accent-hover); font-weight: 680; }
 .deal-consequences ul { margin: 10px 0 0; padding-left: 20px; line-height: 1.55; }
@@ -1889,8 +1905,10 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
 .found-only { color: var(--muted); font-size: 0.94em; }
 
 /* ---- Saved: a few homes you already chose, not a scanning grid ---- */
-.saved-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; }
-.listing-card { padding: 20px 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+/* Cards on a band rather than flush against the panel: the gap between them
+   has to be visible as space, not as two borders meeting. */
+.saved-list { margin: 0; padding: 14px; list-style: none; display: grid; gap: 14px; background: var(--band); }
+.listing-card { padding: 15px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-low); }
 .listing-card.opened-listing .saved-title a { color: var(--muted); }
 .saved-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 10px 20px; }
 .saved-facts { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; color: var(--muted); font-size: 0.86rem; }
@@ -1900,27 +1918,28 @@ details[open] > summary .disclosure-action::after { content: "Hide details"; fon
 .saved-score { margin: 0; color: var(--muted); font-size: 0.78rem; }
 .saved-score strong { color: var(--accent-hover); font-size: 0.95rem; font-weight: 700; }
 .saved-caution { color: var(--amber); font-weight: 620; }
-.saved-title { margin: 8px 0 0; font-size: 1.0625rem; font-weight: 660; line-height: 1.35; }
+.saved-title { margin: 5px 0 0; font-size: 1rem; font-weight: 660; line-height: 1.3; }
 .saved-title a { color: var(--ink); text-decoration: none; }
 .saved-title a:hover { color: var(--accent-hover); text-decoration: underline; }
-.saved-origin { margin: 4px 0 0; color: var(--muted); font-size: 0.76rem; }
+.saved-origin { margin: 3px 0 0; color: var(--muted); font-size: 0.75rem; }
 
-.saved-evidence { margin-top: 14px; padding-top: 14px; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 18px; border-top: 1px solid var(--line); }
-.saved-evidence h4 { margin: 0 0 5px; color: var(--muted); font-size: 0.7rem; font-weight: 650; letter-spacing: 0.015em; }
-.saved-evidence ul { margin: 0; padding-left: 17px; color: var(--ink); font-size: 0.82rem; line-height: 1.55; }
-.saved-evidence p { margin: 0; color: var(--ink); font-size: 0.82rem; line-height: 1.55; }
+.saved-evidence { margin-top: 10px; padding-top: 10px; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 18px; border-top: 1px solid var(--line); }
+.saved-evidence h4 { margin: 0 0 3px; color: var(--muted); font-size: 0.7rem; font-weight: 650; letter-spacing: 0.015em; }
+.saved-evidence ul { margin: 0; padding-left: 17px; color: var(--ink); font-size: 0.8rem; line-height: 1.45; }
+.saved-evidence p { margin: 0; color: var(--ink); font-size: 0.8rem; line-height: 1.45; }
 .saved-evidence .unknown { color: var(--muted); }
 
 /* The note is the reason this page exists, so it is never behind a disclosure. */
-.saved-note { margin-top: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-items: end; }
-.saved-note label { grid-column: 1 / -1; color: var(--muted); font-size: 0.7rem; font-weight: 650; letter-spacing: 0.015em; }
-.saved-note textarea { width: 100%; min-height: 46px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 9px 11px; background: var(--surface); color: var(--ink); font: inherit; font-size: 0.84rem; resize: vertical; }
+.saved-note { margin-top: 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-items: end; }
+.saved-note-label { grid-column: 1 / -1; color: var(--muted); font-size: 0.7rem; font-weight: 650; letter-spacing: 0.015em; }
+.saved-note textarea { width: 100%; min-height: 36px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 9px 11px; background: var(--surface); color: var(--ink); font: inherit; font-size: 0.84rem; resize: vertical; }
 .saved-note textarea:focus-visible { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 3px oklch(43% 0.09 162 / 0.12); }
-.saved-note button { min-height: 42px; }
+.saved-note button { min-height: 36px; }
 
-.saved-actions { margin-top: 14px; padding-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 9px; border-top: 1px solid var(--line); }
+.saved-actions { margin-top: 10px; padding-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-top: 1px solid var(--line); }
+.saved-actions .button, .saved-actions .save-button, .saved-actions .quiet-button { min-height: 34px; padding: 6px 13px; }
 .saved-actions form { display: contents; }
-.saved-outreach > summary { padding: 9px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); cursor: pointer; color: var(--ink); font-size: 0.8rem; font-weight: 620; list-style: none; }
+.saved-outreach > summary { padding: 7px 13px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); cursor: pointer; color: var(--ink); font-size: 0.8rem; font-weight: 620; list-style: none; }
 .saved-outreach > summary::-webkit-details-marker { display: none; }
 .saved-outreach[open] > summary { border-color: var(--accent-line); color: var(--accent-hover); }
 .saved-outreach > div { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }

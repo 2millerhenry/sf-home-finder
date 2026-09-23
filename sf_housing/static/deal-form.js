@@ -37,20 +37,42 @@
   const summaryTarget = form.querySelector("[data-deal-summary]");
   let summarySequence = 0;
   let summaryTimer = null;
-  const refreshSummary = () => {
+  let countsTimer = null;
+  // Two questions of one endpoint. The sentence is free to write and is asked
+  // on every edit; the counts rescore every stored home, which is seconds on a
+  // full pool, so they are asked once the typing stops. Sharing one request
+  // made the description wait for the arithmetic and arrive a keystroke late.
+  const refreshSummary = (withCounts) => {
     if (!summaryTarget) return;
     const mine = ++summarySequence;
+    const body = new FormData(form);
+    if (!withCounts) body.set("counts", "0");
     fetch("/preferences/deal/preview", {
       method: "POST",
-      body: new FormData(form),
+      body: body,
       credentials: "same-origin",
     })
-      .then((response) => (response.ok ? response.json() : null))
+      // A failed request used to end here as null, which left the sentence
+      // frozen and looking current -- the shape the KeyError behind it hid in
+      // for as long as it existed.
+      .then((response) => (response.ok ? response.json() : { ok: false, failed: true }))
       .then((data) => {
         if (!data || mine !== summarySequence) return;
-        // A form mid-edit is often not a valid deal yet. Keeping the last good
-        // sentence is better than flashing an error at someone still typing.
-        if (data.ok && data.summary) summaryTarget.textContent = data.summary;
+        // A form mid-edit is sometimes not a valid deal yet. Say which answer
+        // is in the way rather than leaving the previous sentence standing:
+        // a description of a deal you have since changed, with nothing marking
+        // it as old, is the one thing this section must never show.
+        if (data.ok && data.summary) {
+          summaryTarget.textContent = data.summary;
+          summaryTarget.classList.remove("is-blocked");
+        } else if (!data.ok && data.reason) {
+          summaryTarget.textContent = data.reason + " Until then, this cannot describe your deal.";
+          summaryTarget.classList.add("is-blocked");
+        } else if (data.failed) {
+          summaryTarget.textContent =
+            "This description could not be refreshed, so it may be out of date. Reload the page to see your deal as it stands.";
+          summaryTarget.classList.add("is-blocked");
+        }
         // The same reply carries what this deal would shortlist. Only the
         // newest one is allowed to land, for the same reason as the sentence:
         // a slower earlier request must not overwrite a faster later one.
@@ -71,7 +93,9 @@
   };
   const queueSummary = () => {
     window.clearTimeout(summaryTimer);
-    summaryTimer = window.setTimeout(refreshSummary, 250);
+    window.clearTimeout(countsTimer);
+    summaryTimer = window.setTimeout(() => refreshSummary(false), 250);
+    countsTimer = window.setTimeout(() => refreshSummary(true), 900);
   };
   form.addEventListener("input", queueSummary);
   form.addEventListener("change", queueSummary);

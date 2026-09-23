@@ -2157,3 +2157,106 @@ def test_the_held_back_row_offers_the_way_to_the_near_matches(tmp_path: Path) ->
     pill = pill[: pill.index("</a>")]
     assert tab in pill, f"the pill must use the tab's own URL; got {pill}"
     assert "Check near matches" in pill
+
+
+def test_near_matches_ends_with_two_ways_on_rather_than_a_dead_end(tmp_path: Path) -> None:
+    """The shortlist's footer sends people to near matches; near matches has to
+    send them somewhere in turn, or the last list on the board simply stops."""
+    import pathlib as _p
+
+    page = _p.Path("sf_housing/templates/index.html").read_text(encoding="utf-8")
+    footer = page[page.index('class="near-footer"') :]
+    footer = footer[: footer.index("</div>\n  {% endif %}")]
+
+    assert "Still couldn&rsquo;t find what you were looking for?" in footer
+    assert 'href="/?housing=other&amp;view=active&amp;sort=score"' in footer
+    assert ">Check other homes</a>" in footer
+    assert 'href="/preferences"' in footer
+    assert ">Update your deal</a>" in footer
+    # Only where there is a list to reach the end of, and only on that tab.
+    opening = page[: page.index('class="near-footer"')]
+    assert opening.rstrip().endswith("{% if listings and view == 'near_matches' %}") is False
+    assert "{% if listings and view == 'near_matches' %}" in opening
+    # The Other homes tab is conditional, so the link to it has to be too.
+    assert "{% if show_other_tab %}" in footer
+
+    style = stylesheet()
+    assert ".near-footer {" in style
+    assert ".near-footer-actions {" in style
+
+
+def test_starring_flips_in_place_instead_of_rebuilding_the_board(tmp_path: Path) -> None:
+    """A star used to cost a redirect and a full re-render of a list of
+    hundreds -- about three seconds where nothing said the click had landed.
+
+    Starring does not change which homes belong on the page, so the button can
+    flip and the post can happen behind it. The form is still a real form for
+    anyone without JavaScript.
+    """
+    application = create_app(settings=app_settings(tmp_path), sources=[], enable_scheduler=False)
+    repository = application.state.repository
+    add_listing(repository, "Craigslist", "starred", "Mission room", 1500, "Mission")
+    listing_id = repository.query_listings(0, view="all")[0]["id"]
+
+    with TestClient(application) as client:
+        as_json = client.post(
+            f"/listings/{listing_id}/status",
+            data={"status": "saved", "return_to": "/"},
+            headers={"Accept": "application/json"},
+        )
+        as_form = client.post(
+            f"/listings/{listing_id}/status",
+            data={"status": "active", "return_to": "/"},
+            follow_redirects=False,
+        )
+
+    assert as_json.status_code == 200
+    assert as_json.json() == {"status": "saved"}
+    # The plain form post still redirects, so the page works without scripts.
+    assert as_form.status_code == 303
+
+    import pathlib as _p
+
+    board = _p.Path("sf_housing/templates/index.html").read_text(encoding="utf-8")
+    card = _p.Path("sf_housing/templates/_listing.html").read_text(encoding="utf-8")
+    script = _p.Path("sf_housing/static/listing-actions.js").read_text(encoding="utf-8")
+
+    assert 'action="/listings/{{ listing.id }}/status" data-star-form' in board
+    # The starred list is the one place a star does change the page: un-starring
+    # removes the card, which only a reload can honestly show.
+    assert "star_in_place=false" in board
+    assert '{% if star_in_place %} data-star-form{% endif %}' in card
+    assert 'form.matches("[data-star-form]")' in script
+    assert "const payload = new FormData(form);" in script, (
+        "the hidden field is flipped below, so the body has to be read first"
+    )
+    assert 'headers: { Accept: "application/json" }' in script
+
+
+def test_a_starred_control_does_not_vanish_into_the_row_it_marks() -> None:
+    """A starred row is tinted with --accent-soft. The button that says so was
+    --accent-soft too, so the one control on the page that mattered turned
+    invisible exactly when it turned on."""
+    style = stylesheet()
+
+    row = block_body(style, ".listing-table tbody tr.saved-listing td { ")
+    button = block_body(style, ".save-button.saved { ")
+    assert "var(--accent-soft)" in row
+    assert "var(--accent-soft)" not in button, button
+    assert "background: var(--accent-hover)" in button
+    assert "color: var(--surface)" in button
+
+
+def test_the_starred_cards_are_separated_and_not_a_column_of_one_block() -> None:
+    """Cards flush against the panel and each other read as one slab. They
+    also ran far taller than the facts on them needed."""
+    style = stylesheet()
+
+    listing = block_body(style, ".saved-list { ")
+    assert "padding: 14px" in listing, "the cards need room inside the panel"
+    assert "gap: 14px" in listing
+    assert "background: var(--band)" in listing, "space between cards has to read as space"
+
+    card = block_body(style, ".listing-card { ")
+    assert "padding: 15px 18px" in card
+    assert "box-shadow: var(--shadow-low)" in card
