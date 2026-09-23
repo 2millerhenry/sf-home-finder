@@ -1,3 +1,11 @@
+SF Home Finder 0.5.24 for Windows x64
+
+A home whose source publishes no date shows "Found Yesterday" in the Posted
+column, and that was a word too wide for the column: it ran out under the
+Listing column beside it and was cut off mid-word. It wraps onto two lines
+now, with the date kept whole, at every window width.
+
+
 SF Home Finder 0.5.23 for Windows x64
 
 The board is faster everywhere, and passing a home no longer redraws it.
