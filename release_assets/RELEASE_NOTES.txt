@@ -1,3 +1,29 @@
+SF Home Finder 0.5.23
+
+The board is faster everywhere, and passing a home no longer redraws it.
+
+Every page was working out, for each of the eleven thousand homes it holds,
+an answer that depends on nothing but that home's source: when that source
+last searched everywhere it keeps homes. Two dozen answers, worked out eleven
+thousand times, for every tab you opened. It asks each source once now.
+
+Measured on a real board of 11,300 homes, in processor time so that what else
+the machine is doing cannot flatter it: private rooms twice as fast, your
+saved homes twice as fast, one-bedrooms and studios about three-quarters
+faster, near matches a third faster, and the wait after pressing Pass down by
+a third.
+
+Pass itself no longer waits at all on the shortlist and in near matches: the
+home leaves the list, the count in the heading drops by one, and the saving
+happens behind it -- 40 milliseconds where it used to be about a second. On a
+tab with more than one page it still reloads, because a home from the next
+page moves up into the gap and only a reload knows which one. If the save is
+refused the home comes straight back.
+
+Nothing about what you see has changed: every tab, view, sort, filter and page
+of the board renders exactly what it did before.
+
+
 SF Home Finder 0.5.22
 
 Three days after it arrives, the app asks once whether you would like to help
