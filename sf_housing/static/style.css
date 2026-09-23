@@ -942,6 +942,12 @@ select.is-selected { background: var(--surface-muted); border-color: var(--line-
 .meta-checked { color: var(--muted); }
 .meta-checked.is-today { color: var(--accent); font-weight: 650; }
 .cell-found span { white-space: nowrap; }
+/* A date fits this column; "Found" and a date do not. Held on one line they
+   ran out under the Listing column beside them -- "Found Yesterday" was cut
+   off mid-word. They take two lines instead, with the date still whole, so
+   nothing ever reads as "Sep 13," above "2025". */
+.cell-found .found-only { white-space: normal; }
+.cell-found .found-when { display: block; white-space: nowrap; }
 .cell-area span { color: var(--ink); font-weight: 590; }
 .cell-area .location-hint { display: block; margin-top: 3px; color: var(--muted); font-size: 0.68rem; font-weight: 500; line-height: 1.2; }
 .cell-home strong { display: block; color: var(--ink); font-size: 0.75rem; font-weight: 670; line-height: 1.28; }

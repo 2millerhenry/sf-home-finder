@@ -2316,3 +2316,24 @@ def test_passing_leaves_the_list_in_place_where_that_is_honest(tmp_path: Path) -
     assert "anchor.replaceWith(row)" in script, "a refused pass has to put the home back"
     template = _p.Path("sf_housing/templates/index.html").read_text(encoding="utf-8")
     assert "view in ['active', 'near_matches'] and pages == 1" in template
+
+
+def test_the_posted_column_wraps_a_found_date_instead_of_running_under_the_listing() -> None:
+    """The column is sized for a date; "Found Yesterday" is a word and a date.
+
+    Held on one line it ran out under the Listing column beside it and was cut
+    off mid-word. It takes two lines now, and the date itself still never
+    splits -- nothing may read as "Sep 13," above "2025".
+    """
+    style = stylesheet()
+
+    assert '.listing-table .cell-found { width: 82px; }' in style, (
+        "this fix is about that width; if the column grew, re-measure it"
+    )
+    assert ".cell-found .found-only { white-space: normal; }" in style
+    assert "white-space: nowrap" in block_body(style, ".cell-found .found-when { ")
+
+    page = Path(__file__).resolve().parent.parent / "sf_housing" / "templates" / "index.html"
+    markup = page.read_text(encoding="utf-8")
+    # The date is in its own element, which is what keeps it whole.
+    assert '>Found <span class="found-when">' in markup

@@ -289,7 +289,7 @@
             {% if listing.published_at %}
               <span title="Posted {{ listing.published_at|pacific_datetime }}">{{ listing.published_at|compact_pacific_date }}</span>
             {% else %}
-              <span class="found-only" title="The source does not publish a date. Found {{ listing.first_found|pacific_datetime }}">Found {{ listing.first_found|compact_pacific_date }}</span>
+              <span class="found-only" title="The source does not publish a date. Found {{ listing.first_found|pacific_datetime }}">Found <span class="found-when">{{ listing.first_found|compact_pacific_date }}</span></span>
             {% endif %}
           </td>
           <td class="cell-listing">
