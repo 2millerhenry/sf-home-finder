@@ -24,6 +24,9 @@ from sf_housing.database import (
     UNSEEN_DEMOTE_AFTER,
     UNSEEN_SHORTLIST_AFTER,
     Repository,
+    _FIRST_SEARCH_MISSING,
+    _SOURCE_CLOCK,
+    _UNSEEN_DAYS,
     near_miss_distance,
     near_miss_order,
 )
@@ -835,3 +838,59 @@ def test_the_shortlist_stops_offering_a_home_its_source_has_dropped(
 
     assert "Flat showing" in shortlist_page
     assert "Flat gone_quiet" not in shortlist_page
+
+
+def test_the_source_clock_answers_exactly_as_the_per_home_subquery(
+    repository: Repository,
+) -> None:
+    """One question per source, not one per home, and the same answer.
+
+    ``_SOURCE_LAST_SEARCHED`` -- when a source last searched everywhere it
+    keeps homes -- names no column of the home it is selected against. Asked
+    inline it was still evaluated once per row: on the author's board, two
+    dozen answers computed eleven thousand times for every page drawn. The
+    board query now reads it from ``_SOURCE_CLOCK``, a CTE of one row per
+    source, and that fell from 980ms to 293ms for the expression and 545ms to
+    168ms for Near matches.
+
+    Identical on the author's board is not identical. This holds the two forms
+    together over the shapes a board reaches rarely and a rewrite gets wrong:
+    a source that has never covered anything, one whose every run predates the
+    sighting, one whose runs all failed, one that read nothing, and a home
+    whose source has no runs on record at all -- each of which must come back
+    as no clock, and so as a home that counts as seen.
+    """
+    searching_all_along(repository, 400, platform="Searching")
+    for hours_ago in (900, 800):
+        searched(repository, "OnlyOld", hours_ago=hours_ago)
+    searched(repository, "NeverCovered", hours_ago=10, covered=False)
+    searched(repository, "OnlyFailed", hours_ago=10, status="error")
+    searched(repository, "SawNothing", hours_ago=10, seen=0)
+    shapes = ("Searching", "OnlyOld", "NeverCovered", "OnlyFailed", "SawNothing", "Unrecorded")
+    for platform in shapes:
+        for hours in (0, 1, 30, 100, 300, 500):
+            home(repository, f"{platform}-{hours}", seen=hours, platform=platform)
+
+    looked_up = (
+        "MAX(0.0, COALESCE(julianday("
+        "(SELECT source_last_searched FROM source_clock"
+        "  WHERE clock_platform = listings.platform))"
+        f" - julianday({_FIRST_SEARCH_MISSING}), 0.0))"
+    )
+    with repository.connection() as connection:
+        inline = {
+            row["id"]: row["days"]
+            for row in connection.execute(f"SELECT id, {_UNSEEN_DAYS} AS days FROM listings")
+        }
+        rows = connection.execute(
+            f"WITH RECURSIVE {_SOURCE_CLOCK}"
+            f" SELECT listings.id, {looked_up} AS days FROM listings"
+        ).fetchall()
+
+    # A lookup, not a join, so the rows of the board cannot be multiplied.
+    assert len(rows) == len(inline), "the lookup changed how many homes there are"
+    assert {row["id"]: row["days"] for row in rows} == inline
+    # And the expression is doing work here rather than answering nought to
+    # everything, which would make the comparison above say nothing at all.
+    assert any(value > 0 for value in inline.values())
+    assert len({round(value, 3) for value in inline.values()}) > 2

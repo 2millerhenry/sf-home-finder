@@ -141,7 +141,7 @@ def archive(tmp_path_factory: pytest.TempPathFactory) -> Archive:
 # --------------------------------------------------------------------------
 
 ROW = re.compile(r'<a class="listing-title-link" href="/listings/(\d+)\?')
-COUNT = r'<span class="result-count">.*?</span>'
+COUNT = r'<span class="result-count".*?</span>'
 PAGER = r'<nav class="pager".*?</nav>'
 
 

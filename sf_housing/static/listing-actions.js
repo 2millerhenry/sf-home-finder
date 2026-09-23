@@ -89,3 +89,63 @@ document.addEventListener("submit", function (event) {
       }, 4000);
     });
 });
+
+// Passing, without rebuilding the board to do it.
+//
+// Pass posts and takes a redirect back to the board, so it cost a full render
+// of a list of hundreds -- about a second, with the row still sitting there
+// the whole time. A passed home leaves the list being read and changes exactly
+// one other thing on the page: the count in the heading. So the row can go and
+// the post can happen behind it.
+//
+// The template marks the form only on the two views a passed home leaves, and
+// only while they fit on one page. Past that a home from the next page moves
+// up into the gap and only the server knows which one, so there the form stays
+// an ordinary form and the reload is the honest answer.
+document.addEventListener("submit", function (event) {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) return;
+  if (!form.matches("[data-pass-form]")) return;
+  const row = form.closest(".listing-row");
+  if (!row) return;
+
+  event.preventDefault();
+  const payload = new FormData(form);
+  const count = document.querySelector("[data-result-count]");
+  const before = count ? Number(count.dataset.resultCount) : null;
+
+  const setCount = function (value) {
+    if (!count || !Number.isFinite(value)) return;
+    const noun = count.dataset.resultNoun || "home";
+    count.dataset.resultCount = String(value);
+    count.textContent = value.toLocaleString() + " " + noun + (value === 1 ? "" : "s");
+  };
+
+  // Out of the list first. Kept, not destroyed, so a refusal can put it back
+  // exactly where it was rather than leaving a home the server still holds
+  // missing from the page that is meant to show it.
+  const anchor = document.createComment("passed");
+  row.replaceWith(anchor);
+  if (before !== null) setCount(before - 1);
+
+  fetch(form.action, {
+    method: "POST",
+    body: payload,
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  })
+    .then(function (response) {
+      if (!response.ok) throw new Error("status " + response.status);
+      anchor.remove();
+    })
+    .catch(function () {
+      anchor.replaceWith(row);
+      if (before !== null) setCount(before);
+      const note = document.createElement("span");
+      note.className = "star-failed";
+      note.setAttribute("role", "status");
+      note.textContent = "Not passed — try again";
+      form.append(note);
+      window.setTimeout(function () { note.remove(); }, 4000);
+    });
+});

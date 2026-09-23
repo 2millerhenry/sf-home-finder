@@ -191,7 +191,7 @@
         {% if view == 'active' and housing_mode == 'other' %}Size not stated by any source{% elif view == 'active' and housing_mode != 'room' %}Only confirmed {{ mode_labels[housing_mode][0]|lower }}; large known buildings stay out{% elif view == 'active' %}Showing matches at {{ minimum_score }} or higher{% else %}Your review history is always preserved{% endif %}{% if selected_area_priority == 'dream_strong' %} · Dream and strong target areas only{% elif selected_area_priority == 'secondary' %} · Secondary target areas only{% endif %}
       </p>
     </div>
-    <span class="result-count">{% if pages > 1 %}{{ "{:,}".format(first_on_page) }}&ndash;{{ "{:,}".format(first_on_page + listings|length - 1) }} of {% endif %}{{ "{:,}".format(total_homes) }} {{ result_noun }}{% if total_homes != 1 %}s{% endif %}</span>
+    <span class="result-count" data-result-count="{{ total_homes }}" data-result-noun="{{ result_noun }}">{% if pages > 1 %}{{ "{:,}".format(first_on_page) }}&ndash;{{ "{:,}".format(first_on_page + listings|length - 1) }} of {% endif %}{{ "{:,}".format(total_homes) }} {{ result_noun }}{% if total_homes != 1 %}s{% endif %}</span>
   </header>
 
   {% if listings %}
@@ -371,7 +371,11 @@
                 <input type="hidden" name="status" value="{% if listing.status == 'saved' %}active{% else %}saved{% endif %}">
                 <button class="row-action save-button{% if listing.status == 'saved' %} saved{% endif %}" type="submit" aria-label="{% if listing.status == 'saved' %}Remove from starred listings{% else %}Add to starred listings{% endif %}">{% if listing.status == 'saved' %}★ Starred{% else %}☆ Star{% endif %}</button>
               </form>
-              <form method="post" action="/listings/{{ listing.id }}/status">
+              {#- Passed in place on the two views a passed home leaves, and
+                  only while they fit on one page: past that a home from the
+                  next page moves up into the gap, and only the server knows
+                  which one. Everywhere else this stays a plain form. #}
+              <form method="post" action="/listings/{{ listing.id }}/status"{% if view in ['active', 'near_matches'] and pages == 1 %} data-pass-form{% endif %}>
                 <input type="hidden" name="return_to" value="{{ return_to }}">
                 <input type="hidden" name="status" value="{% if listing.status == 'dismissed' %}active{% else %}dismissed{% endif %}">
                 <button class="row-action quiet-button" type="submit"{% if listing.copy_count > 1 %} title="Applies to this home on every site that lists it"{% endif %}>{% if listing.status == 'dismissed' %}Restore{% else %}Pass{% endif %}</button>

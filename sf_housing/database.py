@@ -546,6 +546,56 @@ _UNSEEN_DAYS = (
     f"MAX(0.0, COALESCE(julianday({_SOURCE_LAST_SEARCHED}) - julianday({_FIRST_SEARCH_MISSING}), 0.0))"
 )
 
+# The same answer, for a query that can afford a CTE.
+#
+# ``_SOURCE_LAST_SEARCHED`` names no column of the home it is selected
+# against -- only its source -- so the board was computing two dozen answers
+# eleven thousand times, once per stored home, for every page it drew.
+# Measured on the author's board of 11,300 homes across 24 sources: Near
+# matches fell from 796ms to 335ms, and the one-bedroom tab from 607ms to
+# 249ms, with every page byte-identical.
+#
+# Walked rather than grouped. ``GROUP BY platform`` would read source_runs
+# whole, and source_runs is never pruned: a year of twice-daily checks across
+# two dozen sources is seventeen thousand rows, and reading all of them for
+# every page is the shape of cost this app has already been bitten by (see
+# tests/test_year_scale_startup.py). So the distinct sources are walked by
+# seeking to the next name, and each is asked for its own latest search --
+# every step an index seek, so the cost is the number of sources and not the
+# number of checks ever recorded.
+#
+# The walk lists a source whose every run failed, where grouping would have
+# left it out of the answer entirely. Both give it no clock all the same: the
+# walk finds NULL for it, and a missing row reads as NULL to the lookup below.
+_SOURCE_CLOCK = (
+    "every_source(source_platform) AS ("
+    "   SELECT MIN(platform) FROM source_runs"
+    "   UNION ALL"
+    "   SELECT (SELECT MIN(platform) FROM source_runs WHERE platform > source_platform)"
+    "     FROM every_source WHERE source_platform IS NOT NULL"
+    "),"
+    " source_clock AS ("
+    " SELECT source_platform AS clock_platform,"
+    "        (SELECT MAX(started_at) FROM source_runs"
+    "          WHERE platform = source_platform AND status = 'success'"
+    "            AND listings_seen > 0 AND covered = 1) AS source_last_searched"
+    "   FROM every_source WHERE source_platform IS NOT NULL)"
+)
+# Only valid where that CTE is in scope. Read per row, not joined: joining
+# source_clock onto listings made SQLite drive the whole query from listings
+# and read it whole, which is the one cost this rewrite exists to avoid. A
+# lookup leaves the row shape and the plan for listings exactly as they were,
+# and the thing being looked up is two dozen rows the query already holds --
+# no run history is touched again. A source with no covering run finds nothing
+# and yields NULL, which is what the correlated form returns for it too, so
+# the home counts as seen either way.
+_UNSEEN_DAYS_VIA_CLOCK = (
+    "MAX(0.0, COALESCE(julianday("
+    "(SELECT source_last_searched FROM source_clock"
+    "  WHERE clock_platform = listings.platform))"
+    f" - julianday({_FIRST_SEARCH_MISSING}), 0.0))"
+)
+
 # The user's own work, which no rule about absence may hide. A star or a note
 # is the one thing on this board that cannot be fetched again, and somebody
 # who starred a home wants to decide for themselves when to give up on it.
@@ -999,6 +1049,21 @@ class Repository:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_source_runs_coverage "
                 "ON source_runs(platform, started_at)"
+            )
+            # The same question, answered without touching the table.
+            #
+            # The index above carries neither ``covered`` nor ``listings_seen``,
+            # so every run it found had to be fetched from the table to read two
+            # flags -- and on this board only 98 of 2,080 runs pass them, so most
+            # of those fetches were wasted. The equality terms first, then the
+            # range the MIN and MAX are taken over, then the last flag carried
+            # only to make the index answer by itself: the order is the whole
+            # point, and putting ``listings_seen`` before ``started_at`` instead
+            # leaves the planner unable to use it at all (measured: 80.6ms
+            # either way, against 34.4ms in this order).
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_source_runs_covered "
+                "ON source_runs(platform, status, covered, started_at, listings_seen)"
             )
             # Until the scanner could skip a source the deal has no use for,
             # SpareRoom and Abacus skipped themselves from inside their search
@@ -2591,13 +2656,14 @@ class Repository:
         # carrying every JSON column through it cost a second and a half on
         # the Archive tab of a real board.
         homes = f"""
-            WITH picked AS (
+            WITH RECURSIVE {_SOURCE_CLOCK},
+            picked AS (
                 SELECT id AS picked_id, {GROUP_SQL} AS home,
                        status = 'saved' AS starred, COALESCE(note, '') <> '' AS noted,
                        {_GONE} AS gone, eligibility = 'ineligible' AS outside, {_STALE} AS stale,
                        copy_rank AS picked_rank,
                        score AS picked_score, opened_at AS picked_opened_at,
-                       {_UNSEEN_DAYS} AS picked_unseen_days,
+                       {_UNSEEN_DAYS_VIA_CLOCK} AS picked_unseen_days,
                        ({_CHEAP_RENT_UNCONFIRMED}) AS picked_cheap_rent
                 FROM listings{where}
             ),

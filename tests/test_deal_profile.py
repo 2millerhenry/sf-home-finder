@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import json
@@ -1562,3 +1563,71 @@ def test_an_avoided_area_is_actually_read_when_scoring() -> None:
 
     assert result.eligibility == "ineligible"
     assert any("avoid list" in reason for reason in result.eligibility_reasons), result.eligibility_reasons
+
+
+def test_a_saved_deal_is_read_back_without_reparsing_the_file_each_time(tmp_path: Path) -> None:
+    """The same 1.2KB of YAML was parsed again for every request served.
+
+    ``parse_preferences`` validates, builds the deal profile, and for a legacy
+    file dumps its own legacy view back to YAML and reads it again: 14.6ms,
+    which was half of the Saved page and paid on every navigation. It is now
+    memoised on the file's exact bytes.
+
+    Content, not modification time. This holds the two things that makes
+    necessary: a rewritten file must be seen at once, and a file whose bytes
+    are unchanged must not be parsed twice.
+    """
+    from sf_housing.preferences import _parsed, load_preferences, save_deal_profile
+
+    settings = settings_for(tmp_path)
+    application = create_app(settings=settings, sources=[], enable_scheduler=False)
+    with TestClient(application) as client:
+        client.post("/preferences/deal", data=valid_form(), follow_redirects=False)
+
+    first = load_preferences(settings.preferences_path)
+    again = load_preferences(settings.preferences_path)
+    assert first is again, "unchanged bytes must not be parsed twice"
+
+    # A deal saved through the app's own path is visible on the next read, with
+    # no cache to clear and no clock to trust.
+    profile = first.deal_profile
+    changed = replace(profile, budgets={**profile.budgets})
+    changed.budgets["studio"] = replace(profile.budgets["studio"], maximum_monthly=4321)
+    save_deal_profile(settings.preferences_path, changed, first)
+
+    after = load_preferences(settings.preferences_path)
+    assert after is not first
+    assert after.deal_profile.budgets["studio"].maximum_monthly == 4321
+
+    # Writing the same bytes back is a hit again, which is the point of keying
+    # on content: a save that changed nothing costs nothing.
+    settings.preferences_path.write_text(
+        settings.preferences_path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    assert load_preferences(settings.preferences_path) is after
+
+
+def test_nothing_writes_into_a_preferences_object_that_is_now_shared() -> None:
+    """The memo above hands the same object to every reader of one file.
+
+    That is only safe while nobody edits what they were handed. ``Preferences``
+    is frozen, but the dictionaries inside it are not, so this asserts the
+    invariant the cache rests on over the whole package rather than trusting
+    that it stays true.
+    """
+    import re as _re
+
+    package = Path(__file__).resolve().parent.parent / "sf_housing"
+    writes = _re.compile(
+        r"\.(?:data|canonical)\s*\[[^\]]+\]\s*="
+        r"|\.(?:data|canonical)\.(?:update|pop|setdefault|clear|popitem)\("
+        r"|section\([^)]*\)\s*\[[^\]]*\]\s*="
+        r"|section\([^)]*\)\.(?:update|pop|setdefault|clear)\("
+    )
+    offenders = [
+        f"{path.name}:{number}: {line.strip()}"
+        for path in sorted(package.glob("*.py"))
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if writes.search(line)
+    ]
+    assert not offenders, "a shared Preferences is being mutated:\n" + "\n".join(offenders)

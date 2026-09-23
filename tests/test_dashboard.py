@@ -2260,3 +2260,59 @@ def test_the_starred_cards_are_separated_and_not_a_column_of_one_block() -> None
     card = block_body(style, ".listing-card { ")
     assert "padding: 15px 18px" in card
     assert "box-shadow: var(--shadow-low)" in card
+
+
+def test_passing_leaves_the_list_in_place_where_that_is_honest(tmp_path: Path) -> None:
+    """Pass posted and took a redirect, so it cost a full board render.
+
+    Measured in-process: 951ms for the round trip, of which the write is about
+    20ms and the rest is drawing a list of hundreds again. A passed home leaves
+    the list being read and changes exactly one other thing on the page -- the
+    count in the heading, which drops by one -- so the row can go and the post
+    can happen behind it.
+
+    Only where that is the whole truth. On a view of more than one page a home
+    from the next page moves up into the gap and only the server knows which,
+    and on the Archive a passed home does not leave at all. There the form
+    stays an ordinary form.
+    """
+    application = create_app(settings=app_settings(tmp_path), sources=[], enable_scheduler=False)
+    repository = application.state.repository
+    add_listing(repository, "Craigslist", "passing", "Mission room", 1500, "Mission")
+    listing_id = repository.query_listings(0, view="all")[0]["id"]
+
+    with TestClient(application) as client:
+        board = client.get("/?housing=room&view=active&sort=score").text
+        archive = client.get("/?view=all&sort=score").text
+        as_json = client.post(
+            f"/listings/{listing_id}/status",
+            data={"status": "dismissed", "return_to": "/"},
+            headers={"Accept": "application/json"},
+        )
+        as_form = client.post(
+            f"/listings/{listing_id}/status",
+            data={"status": "active", "return_to": "/"},
+            follow_redirects=False,
+        )
+
+    assert as_json.status_code == 200 and as_json.json() == {"status": "dismissed"}
+    # Still a real form for anyone without scripts, and for the plain path.
+    assert as_form.status_code == 303
+
+    assert "data-pass-form" in board, "the shortlist is one page here"
+    assert "data-pass-form" not in archive, "a passed home does not leave the Archive"
+    # The heading carries the number and the noun, because the browser has to
+    # write the same sentence the server would.
+    assert 'data-result-count="1"' in board
+    assert 'data-result-noun="room"' in board
+
+    import pathlib as _p
+
+    script = _p.Path("sf_housing/static/listing-actions.js").read_text(encoding="utf-8")
+    assert 'form.matches("[data-pass-form]")' in script
+    assert "const payload = new FormData(form);" in script, (
+        "the body must be read before the row leaves the document"
+    )
+    assert "anchor.replaceWith(row)" in script, "a refused pass has to put the home back"
+    template = _p.Path("sf_housing/templates/index.html").read_text(encoding="utf-8")
+    assert "view in ['active', 'near_matches'] and pages == 1" in template

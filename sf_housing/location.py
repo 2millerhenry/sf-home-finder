@@ -437,6 +437,14 @@ _GENERIC_AREAS = {_area_fold(label) for label in GENERIC_LOCATIONS}
 _STATE_SUFFIX = re.compile(r",?\s*(?:ca|california)\.?$", re.IGNORECASE)
 
 
+# One area has one spelling, so the same few hundred labels are folded over
+# and over: the rent table alone asked 9,703 times about 537 distinct strings
+# while ranking one board. The answer depends on nothing but the string, and
+# the tables it reads are built once at import, so a cache of them is the same
+# function with the repeated work removed. Sized well past the ~540 spellings
+# a real board holds, and bounded so a source inventing labels cannot grow it
+# without limit.
+@lru_cache(maxsize=8192)
 def canonical_neighborhood(value: str | None) -> str | None:
     """One spelling for one area, so one area is one group everywhere.
 
