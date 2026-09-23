@@ -42,7 +42,15 @@ from .deal_profile import (
     deal_profile_from_form,
     profile_form_values,
 )
-from .diagnostics import SUPPORT_EMAIL, report_json, run_diagnostics
+from .diagnostics import SUPPORT_EMAIL, nothing_is_broken, report_json, run_diagnostics
+from .donation_prompt import (
+    ask_is_due,
+    read_state,
+    record_ask,
+    record_thanks,
+    resolve_first_seen,
+    write_state,
+)
 from .freshness import evaluate_source_freshness
 from .furnished_finder_bridge import (
     BRIDGE_VERSION as FURNISHED_FINDER_BRIDGE_VERSION,
@@ -2158,6 +2166,66 @@ def create_app(
     @one_connection
     def support_report_json(request: Request):
         return JSONResponse(support_report(request).to_dict())
+
+    # The thank-you card. How often it may appear is decided in
+    # ``donation_prompt``; the two refusals that are about this moment rather
+    # than the count are decided here, because only the running app knows them.
+
+    @application.post("/donation-card")
+    @one_connection
+    def donation_card(request: Request):
+        """Whether to show the card, recorded in the same breath as it is decided.
+
+        A POST because answering it is a change: the ask is counted here rather
+        than on a second call from the browser. Split across two requests there
+        is a window -- a closed tab, a reload, a script that threw in between --
+        where the card is shown and never counted, and anything falling in it
+        turns two asks in a lifetime into an ask on every page load, which is
+        the one failure this feature must not have.
+
+        The Ready Check is left until last because it is the expensive refusal.
+        It is the same read-only report the Support page builds and it touches
+        no network, but it is worth nothing to an install that has already
+        answered, so it is only ever reached in the few days an ask is owed.
+        """
+        if not DONATE_URL:
+            return JSONResponse({"due": False})
+        now = datetime.now(UTC)
+        data_dir = active_settings.data_dir
+        state = resolve_first_seen(data_dir, read_state(data_dir, now=now))
+        if not ask_is_due(state, now=now):
+            return JSONResponse({"due": False})
+        # Never over a running check. The browser refuses this as well, because
+        # the progress panel is on the page the card would cover -- but a scan
+        # started in another tab, or by the scheduler, is invisible from there.
+        if scanner.progress.get("running"):
+            return JSONResponse({"due": False})
+        # Never while something is broken. An app asking for money on a morning
+        # it is not working is asking for a toll, which is why the Support page
+        # already keeps its own ask underneath "Everything is working". Broken
+        # means this app's own machinery, not a listings site having a bad
+        # morning -- see ``nothing_is_broken``, which is the difference between
+        # a card that appears twice and a card that never appears at all.
+        if not nothing_is_broken(support_report(request)):
+            return JSONResponse({"due": False})
+        # An ask that could not be written down is an ask that would be made
+        # again on the next page load, so it is not made at all.
+        if not write_state(data_dir, record_ask(state, now=now)):
+            return JSONResponse({"due": False})
+        return JSONResponse({"due": True})
+
+    @application.post("/donation-card/thanks", status_code=204)
+    def donation_card_thanks():
+        """Somebody went to the donation page. That is the end of the asking.
+
+        Recorded on the way out rather than on the way back: nothing here can
+        see what happens on Ko-fi's page, and asking again of somebody who has
+        just given is a worse failure than staying quiet towards somebody who
+        looked and decided not to.
+        """
+        data_dir = active_settings.data_dir
+        write_state(data_dir, record_thanks(read_state(data_dir)))
+        return Response(status_code=204)
 
     def _start_facebook_check(trigger: str) -> str:
         """Check Facebook, and only Facebook. Returns what happened.

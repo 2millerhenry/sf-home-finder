@@ -963,6 +963,40 @@ def _probe_public_sources(sources: Iterable[ListingSource]) -> DiagnosticCheck:
     )
 
 
+# The app's own machinery, as opposed to the weather outside it. A listings
+# site being paused says nothing about whether this app is working; its
+# storage, its runtime, its deal and the way it starts say everything.
+CORE_CATEGORIES = frozenset({"Application", "Your deal", "Startup"})
+
+
+def nothing_is_broken(report: DiagnosticReport) -> bool:
+    """Whether the app is working, in the sense that matters to somebody using it.
+
+    Deliberately not ``report.overall == "ready"``, which was the first attempt
+    and was wrong in a way only a real board showed. "Ready" means every one of
+    the thirty-odd checks passed, and a third of them are per-source: measured
+    against the author's own install -- nine thousand homes, working perfectly,
+    twenty-three sites read twice a day -- Zillow wanted attention, RentSFNow
+    was paused for the hour, and the last scan was flagged for review because
+    of exactly those two. That is an ordinary Tuesday for a scraper, and a gate
+    on "ready" would have been a gate that never opened.
+
+    The report already draws the line this needs, and says so in its own words.
+    Anything ``blocked`` is a required check failing. An unfinished deal means
+    there is not yet an app here to have an opinion about. Everything else it
+    calls attention, under a summary that reads "the core app remains usable".
+    So: broken is this app's own machinery being broken, and a listings site
+    having a bad morning is not that.
+    """
+    if report.overall == "setup_incomplete":
+        return False
+    return not any(
+        check.status == "blocked"
+        or (check.status in {"attention", "unknown"} and check.category in CORE_CATEGORIES)
+        for check in report.checks
+    )
+
+
 def run_diagnostics(
     settings: Settings,
     repository: Repository,

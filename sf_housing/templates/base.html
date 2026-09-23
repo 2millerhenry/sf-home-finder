@@ -57,7 +57,7 @@
       <p class="footer-support">
         <span>Free to use, forever.</span>
         <a class="donate-button" href="{{ donate_url }}" target="_blank" rel="noopener noreferrer external"
-           data-donate-open data-donate-embed="{{ donate_url }}?hidefeed=true&amp;widget=true&amp;embed=true&amp;preview=true">
+           data-donate-open>
           {# Decorative. The label already says what the button does, so the
              heart is hidden rather than announced as a second one. #}
           <svg class="donate-heart" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -75,7 +75,12 @@
      runs on this page, and its src is left empty until somebody clicks: opening
      the dashboard tells Ko-fi nothing, which is the promise the footer above it
      makes. #}
-  <dialog class="donate-dialog" data-donate-dialog aria-label="Support this app">
+  {# The embed url belongs to the panel rather than to whichever control
+     opened it. There is more than one of those now -- the footer button and
+     the thank-you card's -- and a source of truth held by one of them is a
+     source of truth the other has to reach across the page to borrow. #}
+  <dialog class="donate-dialog" data-donate-dialog aria-label="Support this app"
+          data-donate-embed="{{ donate_url }}?hidefeed=true&amp;widget=true&amp;embed=true&amp;preview=true">
     {# The surface is this inner element, not the dialog. A dialog that has to
        stay overflow:visible for the close button cannot also clip the frame, so
        giving both a radius left a hairline of dialog showing at every corner. #}

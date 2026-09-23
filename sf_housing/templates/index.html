@@ -554,4 +554,39 @@
     </section>
   </div>
 </details>
+{% if donate_url %}
+{#- The thank-you card. Twice in the life of an install and never again: the
+    counting is in ``donation_prompt.py`` and the two refusals about the moment
+    -- never over a running check, never while the Ready Check says something
+    is broken -- are in the route it asks. Nothing here decides any of that;
+    the markup is inert until donation-card.js is told the ask is owed.
+
+    On the dashboard alone, because "every so often when you open it" means the
+    board, not a settings page somebody is already busy on. The footer's button
+    is still the way to give at any other moment, and this card's own Say
+    thanks hands over to that same panel rather than opening a second one. -#}
+<dialog class="thanks-card" data-thanks-card aria-labelledby="thanks-card-title">
+  <article class="thanks-surface">
+    {#- The logo behind the writing rather than beside it: the same drawing the
+        header wears, at fifteen times the size and a twentieth of the contrast,
+        so it reads as the card's own watermark and never as a second thing to
+        look at. -#}
+    <svg class="thanks-watermark" viewBox="0 0 747 280" aria-hidden="true" focusable="false">{% include "_bridge.html" %}</svg>
+    <div class="thanks-note">
+      <div class="thanks-brand" role="img" aria-label="SF Home Finder">{% include "_brand.html" %}</div>
+      <h2 class="thanks-title" id="thanks-card-title">Free forever.</h2>
+      <p class="thanks-copy">Finding a place is already hard enough, let alone expensive enough. So this stays free, ad-free, and private on your computer. People like you keep it running, improving, and up to date.</p>
+      <p class="thanks-actions">
+        {#- A real link to the real page. A plain click is caught and handed to
+            the Ko-fi panel, but a middle click or a cmd-click is somebody
+            deliberately opening it in a tab, and that has to keep working. -#}
+        <a class="thanks-yes" href="{{ donate_url }}" target="_blank" rel="noopener noreferrer external" data-thanks-yes>Say thanks</a>
+        <button type="button" class="thanks-no" data-thanks-no>Not right now</button>
+      </p>
+    </div>
+    <button type="button" class="thanks-close" data-thanks-close aria-label="Close">&times;</button>
+  </article>
+</dialog>
+<script src="{{ url_for('static', path='donation-card.js') }}?v={{ asset_version() }}" defer></script>
+{% endif %}
 {% endblock %}

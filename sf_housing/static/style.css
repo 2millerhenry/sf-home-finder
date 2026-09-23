@@ -332,6 +332,240 @@ main { max-width: 1180px; margin: 0 auto; padding: 42px 28px 72px; }
   @keyframes donate-veil { from { opacity: 0; } to { opacity: 1; } }
 }
 
+/* The thank-you card. Twice in the life of an install, over the board, on the
+   app's own initiative -- so it has half a second to read as a note somebody
+   wrote rather than as a popup, and everything below is spent on that.
+
+   Written in two voices on purpose. The message is a serif, because a serif
+   sentence on a warm sheet is what a card is; the brand and the buttons stay
+   in the app's own sans, because they are the app speaking rather than the
+   note. One family for both would have made the card look like another
+   section of the page, which is the one thing it must not look like. The
+   serif is the system's -- New York on a Mac, Georgia elsewhere -- so the
+   promise that nothing here reaches the network survives the design. */
+.thanks-card {
+  width: min(92vw, 468px);
+  padding: 0;
+  border: 0;
+  background: none;
+  overflow: visible;
+  color: var(--ink);
+}
+/* The board behind it has to stop competing for the eye, or a card this quiet
+   reads as one more row on the page. A blur as well as the veil: the shapes
+   underneath stay recognisable as the work being interrupted, which is what
+   makes the interruption feel brief. */
+.thanks-card::backdrop { background: var(--scrim); backdrop-filter: blur(3px); }
+/* The surface owns the border, the radius and the clipping, so the watermark
+   can run off its edges and still be cut cleanly by them. The dialog stays
+   overflow:visible and cannot clip anything -- the same division the donation
+   panel above arrived at after it tried to do both. */
+.thanks-surface {
+  position: relative;
+  overflow: hidden;
+  padding: 38px 42px 34px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  /* Two tokens that both already answer the theme, falling from the lit top
+     corner to the shaded bottom one. A warmer paper was tried with a fixed
+     colour and looked like a cream card sitting on a charcoal page at night. */
+  background: linear-gradient(168deg, var(--surface), var(--band));
+  box-shadow: 0 34px 84px oklch(21% 0.018 160 / 0.3);
+}
+/* The logo behind the writing rather than beside it: the same drawing the
+   header wears, many times the size and at a fraction of its contrast, cropped
+   by the card's own edges. Contained inside the padding it read as a picture
+   somebody had placed; running off two sides it reads as the paper. Eight per
+   cent works in both themes -- a dark green on near-white and a pale sage on
+   charcoal land at about the same whisper. */
+.thanks-watermark {
+  position: absolute;
+  left: 50%;
+  /* Low and oversized, so both towers fall outside the card and what is left
+     inside it is the span arcing under the writing. Drawn smaller and centred
+     it sat a whole tower directly behind the sentence and read as a picture
+     somebody had put there; pushed past the edges it reads as the paper. */
+  top: 70%;
+  width: 172%;
+  height: auto;
+  transform: translate(-50%, -50%);
+  fill: var(--accent);
+  /* Measured in both themes on a real board: a dark green on near-white and a
+     pale sage on charcoal land at about the same whisper here. */
+  opacity: 0.065;
+  pointer-events: none;
+}
+/* Above the watermark, and the reason the watermark can be as large as it is. */
+.thanks-note { position: relative; z-index: 1; }
+.thanks-brand { margin: 0 0 24px; color: var(--accent); }
+/* The header swaps the lockup for the bridge alone below 760px, because seven
+   to one will not fit beside the tabs. Nothing is competing for room inside a
+   card, the app's name is the first thing this note has to say, and the lockup
+   is 145px at this height -- so the swap is turned off here and the wordmark
+   stays on a phone. */
+.thanks-brand .brand-lockup { display: block; height: 17px; }
+.thanks-brand .brand-mark { display: none; }
+.thanks-title {
+  margin: 0 0 15px;
+  font-family: ui-serif, "New York", Georgia, "Times New Roman", serif;
+  font-size: clamp(2.05rem, 6.2vw, 2.7rem);
+  font-weight: 600;
+  letter-spacing: -0.022em;
+  line-height: 1.04;
+  color: var(--ink);
+}
+/* Full ink rather than the muted grey a note like this usually gets. The
+   italic is already doing the softening, and three sentences somebody is asked
+   to read once should not also be the faintest thing on the card.
+
+   The measure is really the surface's own padding -- 384px inside a 468px
+   card, which sets four lines of about fifty characters and was checked in a
+   browser against the shipped sentence: no split clause, and a last line a
+   little over two thirds full rather than an orphan. The max-width is only a
+   ceiling for a card ever made wider than this, where a line of italic serif
+   running the full width would stop being readable. */
+.thanks-copy {
+  margin: 0 0 30px;
+  max-width: 44ch;
+  font-family: ui-serif, "New York", Georgia, "Times New Roman", serif;
+  font-size: 1.05rem;
+  font-style: italic;
+  line-height: 1.62;
+  color: var(--ink);
+}
+.thanks-actions { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; }
+/* Filled, where the footer's button is outlined. Down there it is an offer
+   standing beside the small print and a solid accent would read as the next
+   step in the work; here it is the only thing being proposed, and anything
+   quieter would leave the card asking a question it had not put a button on. */
+.thanks-yes {
+  display: inline-flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 12px 30px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--surface);
+  font-size: 0.86rem;
+  font-weight: 650;
+  letter-spacing: 0.085em;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+  box-shadow: 0 10px 22px oklch(43% 0.09 162 / 0.26);
+  transition: background-color 200ms var(--ease-state), border-color 200ms var(--ease-state), transform 200ms var(--ease-state), box-shadow 200ms var(--ease-state);
+}
+.thanks-yes:hover { background: var(--accent-hover); border-color: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 15px 30px oklch(43% 0.09 162 / 0.32); }
+/* It goes under the finger and the shadow closes up with it. A button that
+   only changed colour on press felt like a link; this one feels pressed. */
+.thanks-yes:active { transform: translateY(1px) scale(0.988); box-shadow: 0 5px 12px oklch(43% 0.09 162 / 0.3); }
+.thanks-yes:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* The refusal is set in the same hand as the note, because it is the note's
+   own sentence finishing -- not a second button arguing with the first. */
+.thanks-no {
+  min-height: 46px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font-family: ui-serif, "New York", Georgia, "Times New Roman", serif;
+  font-size: 1rem;
+  font-style: italic;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 4px;
+  cursor: pointer;
+  transition: color 180ms var(--ease-state), text-decoration-color 180ms var(--ease-state);
+}
+.thanks-no:hover { color: var(--ink); background: none; border-color: transparent; text-decoration-color: var(--muted); }
+.thanks-no:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Inside the corner rather than hung outside it: the panel above can afford
+   to put its close on the edge because it is somebody else's white card, but
+   this one is our paper and a button breaking its border would break the
+   illusion the whole card is built on. The shared button rule is 42px with
+   padding for a touch target, so a round icon has to opt out on every axis. */
+.thanks-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--faint);
+  font-size: 1.15rem;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 160ms var(--ease-state), background-color 160ms var(--ease-state);
+}
+.thanks-close:hover { color: var(--ink); background: var(--row-hover); border-color: transparent; }
+.thanks-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 540px) {
+  .thanks-surface { padding: 30px 24px 26px; border-radius: 18px; }
+  .thanks-copy { margin-bottom: 26px; font-size: 1rem; }
+  .thanks-actions { gap: 6px 18px; }
+  .thanks-yes { padding: 12px 24px; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The card and the veil arrive together and neither overshoots: this is a
+     sheet being laid down, not a thing thrown at the screen. Slower than the
+     donation panel's 260ms because that one answers a click and this one
+     arrives unasked -- the same motion at the panel's speed read as an alert. */
+  .thanks-card[open] { animation: thanks-in 560ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .thanks-card[open]::backdrop { animation: thanks-veil 460ms ease-out; }
+  @keyframes thanks-in {
+    from { opacity: 0; transform: translateY(18px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes thanks-veil { from { opacity: 0; } to { opacity: 1; } }
+
+  /* Then the note is written onto it. Sixty milliseconds apart, which is one
+     movement settling rather than four things appearing, and all of it over
+     well before a hand could reach the buttons. */
+  .thanks-card[open] .thanks-brand,
+  .thanks-card[open] .thanks-title,
+  .thanks-card[open] .thanks-copy,
+  .thanks-card[open] .thanks-actions {
+    animation: thanks-rise 520ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+  .thanks-card[open] .thanks-brand { animation-delay: 90ms; }
+  .thanks-card[open] .thanks-title { animation-delay: 150ms; }
+  .thanks-card[open] .thanks-copy { animation-delay: 210ms; }
+  .thanks-card[open] .thanks-actions { animation-delay: 270ms; }
+  @keyframes thanks-rise {
+    from { opacity: 0; transform: translateY(9px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  /* Leaving, in two different sentences. "Not right now" drops a few pixels
+     and goes: the card agreeing, quickly, and taking no more of the moment
+     than it has to. Say thanks does the opposite -- it grows very slightly as
+     it fades, so the Ko-fi panel that follows reads as this movement carrying
+     on rather than as a second thing opening on top of the first.
+
+     Both run forwards, because the element is not hidden until the script
+     sees animationend: without it the card would snap back to full opacity
+     for the last frame before it closed. */
+  .thanks-card[data-leaving] { animation: thanks-out 220ms cubic-bezier(0.4, 0, 1, 1) forwards; }
+  .thanks-card[data-leaving]::backdrop { animation: thanks-veil-out 220ms ease-in forwards; }
+  .thanks-card[data-leaving="yes"] { animation: thanks-onward 260ms cubic-bezier(0.4, 0, 1, 1) forwards; }
+  @keyframes thanks-out { to { opacity: 0; transform: translateY(7px) scale(0.985); } }
+  @keyframes thanks-onward { to { opacity: 0; transform: scale(1.02); } }
+  @keyframes thanks-veil-out { to { opacity: 0; } }
+}
+
 /* Deliberately a shade darker than the page and a size larger than the rest
    of the small print. It is the one place the app asks for anything, and set
    to match the page it read as something already scrolled past. */
