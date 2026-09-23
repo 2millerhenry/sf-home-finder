@@ -1,3 +1,29 @@
+SF Home Finder 0.5.21
+
+Review your deal now describes the whole deal, and keeps up as you fill it in.
+It used to freeze the moment you ticked a second home size and say nothing
+about it, so the save afterwards refused for a reason the review had never
+mentioned. A ticked size with no price is named, every area is named rather
+than the first four, and the move-in dates, lease length and household limit
+are all in the sentence. When an answer stops the deal making sense, the
+sentence says which one instead of leaving the old description standing. It
+also arrives while you type: it used to wait on a rescore of every home you
+have collected.
+
+Areas in the Avoid column are now actually read when a home is scored. The
+column promised known listings would stay out, and nothing was reading it.
+
+Near matches ends with two ways on -- the Other homes tab, and your deal --
+instead of stopping.
+
+Starring is immediate. It used to rebuild the whole list to fill in one star,
+which took about three seconds with nothing on screen saying the click had
+landed. The starred button no longer matches the row it marks, so you can see
+which homes are starred.
+
+Starred cards have space between them and are about two-thirds of the height.
+
+
 SF Home Finder 0.5.20
 
 A rent far under what its area charges is marked "46% off", and the note behind
