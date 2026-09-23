@@ -1,3 +1,22 @@
+SF Home Finder 0.5.22
+
+Three days after it arrives, the app asks once whether you would like to help
+pay for it -- a card over the board, rather than the quiet line in the footer
+that has always been there. Close it and it asks once more a week later, and
+then never again. Pressing Say thanks ends the asking immediately, whether or
+not you give anything.
+
+It stays out of the way to get there. It will not appear over a running check,
+or while anything about the app itself needs attention, or in a window you are
+not looking at. A listings site having a bad morning does not count as the app
+being broken -- with twenty-three of them read twice a day, one is almost
+always paused, and a card that waited for a spotless report would never appear
+at all.
+
+Say thanks opens the same Ko-fi panel the footer button has always opened.
+Nothing is fetched from Ko-fi until you press it.
+
+
 SF Home Finder 0.5.21
 
 Review your deal now describes the whole deal, and keeps up as you fill it in.
