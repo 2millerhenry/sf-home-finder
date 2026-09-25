@@ -35,11 +35,12 @@ no admin*</sub>
 of it. Your saved homes stay unless you ask for those too.*</sub>
 
 <details>
-<summary><b>Rather not pipe a URL into bash?</b> Read it first.</summary>
+<summary><b>Don't want to run a script you haven't read?</b></summary>
 
 <br>
 
-Fair — that command asks you to run code you have not read. Here it is with that fixed:
+Read it first. This URL is pinned to a release, so the file cannot change between reading it
+and running it:
 
 ```
 curl -fsSL -o install.sh https://raw.githubusercontent.com/2millerhenry/sf-home-finder/v0.5.24/install.sh
@@ -47,56 +48,39 @@ less install.sh
 bash install.sh
 ```
 
-That URL is pinned to a release tag, so the file cannot change between reading it and running
-it, and every release publishes its SHA-256. The command at the top fetches the same script
-from the same place, unpinned so it always installs the newest version.
-
-Or skip scripts entirely: download the ZIP below, check it against the checksum in the release
-notes, and read `payload/install.sh` before running it. The install needs no password and no
-administrator, and writes only to `~/Library/Application Support/SF Home Finder` and
-`~/.local/bin`.
-
-</details>
-
-<details>
-<summary><b>Want to check the download was built from this source?</b></summary>
-
-<br>
-
-Releases are built by [GitHub Actions](.github/workflows/release.yml), not on anybody's laptop,
-and GitHub signs a record tying each archive to the workflow and commit that produced it:
+Or check the download instead of the script. Releases are built by
+[GitHub Actions](.github/workflows/release.yml), not on my laptop, and GitHub signs a record of
+which commit produced each file:
 
 ```
 gh attestation verify SF-Home-Finder-0.5.24-macOS-arm64.tar.xz -R 2millerhenry/sf-home-finder
 ```
 
-The build is also reproducible — every timestamp in both archives is pinned, so a GitHub runner
-and a laptop building the same commit produce byte-identical files. Clone the tag, run
-`python scripts/build_release.py`, and the checksum matches the one in the release notes.
+The build is reproducible, so you can check the other direction too: clone the tag, run
+`python scripts/build_release.py`, and you get a byte-identical archive. One proves the file
+came from that commit; the other proves that commit makes that file.
 
-Attestation says this archive came from that commit. Reproducibility says that commit really
-makes this archive. Together there is no step that asks you to trust me.
+Every release also ships an `INSTALL-REPORT`: a list of every path the install created on a
+clean machine, taken by the runner that built it. Nothing needs a password, and it writes only
+to `~/Library/Application Support` and `~/.local/bin`.
 
 </details>
 
 <details>
-<summary><b>Happy to be counted?</b> There is a second line for that.</summary>
+<summary><b>Happy to be counted?</b></summary>
 
 <br>
 
-The install above comes straight from GitHub and tells me nothing. If you do not mind being
-counted, use this instead:
+The install above tells me nothing. If you don't mind being counted, use this instead — the
+same script, through a [worker](deploy/install-counter/worker.js) that adds one to a tally:
 
 ```
 curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
 ```
 
-It is the same script, handed through a [Cloudflare worker](deploy/install-counter/worker.js)
-that adds one to a tally and changes nothing else. No address is stored — yours is salted with
-a secret and the date, hashed, and only the hash is kept, so it cannot be turned back into an
-IP or followed from one day to the next.
-
-It is the only way I have of knowing whether anyone uses this. Entirely your call.
+No address is kept: yours is salted with a secret and the date, hashed, and only the hash is
+stored, so tomorrow the same laptop looks like a different one. It is the only way I know
+whether anyone uses this — entirely your call.
 
 </details>
 

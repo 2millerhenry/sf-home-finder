@@ -112,11 +112,11 @@ Not in this release. The most recent Windows build is on an [earlier release](ht
     installer_digest = hashlib.sha256(installer.read_bytes()).hexdigest() if installer.is_file() else ""
     verify = f"""
 <details>
-<summary>Rather not pipe a URL into bash? Read it first.</summary>
+<summary>Don't want to run a script you haven't read?</summary>
 
 <br>
 
-Fair. That command asks you to run code you have not read, served by a host you have no way to audit. Here is the same install with neither of those:
+Read it first. This URL is pinned to this release, so the file cannot change between reading it and running it:
 
 ```
 curl -fsSL -o install.sh https://raw.githubusercontent.com/{REPO}/v{version}/install.sh
@@ -124,40 +124,19 @@ less install.sh
 bash install.sh
 ```
 
-A tag is immutable, so the file you read is the file you run, and it comes straight from the repository with nothing in between. Its checksum for this release:
-
 ```
 {installer_digest}  install.sh
 ```
 
-The command at the top of this page fetches the same script from the same place, unpinned so it always installs the newest release.
-
-Or skip scripts altogether: download the ZIP below, check it against its checksum, and read `payload/install.sh` before you run it. Nothing in this install needs a password or an administrator, and it only writes to `~/Library/Application Support/SF Home Finder` and `~/.local/bin`.
-
-</details>
-
-<details>
-<summary>Check that this download was built from this source.</summary>
-
-<br>
-
-**GitHub built it, and signed a record saying so.** Nothing here was uploaded from anybody's laptop:
+Or check the download instead of the script. This release was built by [GitHub Actions](https://github.com/{REPO}/blob/v{version}/.github/workflows/release.yml), not on my laptop, and GitHub signs a record of which commit produced each file:
 
 ```
 gh attestation verify SF-Home-Finder-{version}-macOS-arm64.tar.xz -R {REPO}
 ```
 
-That names the workflow and the exact commit the archive was built from.
+The build is reproducible, so you can check the other direction too: clone the tag, run `python scripts/build_release.py`, and you get a byte-identical archive. One proves the file came from that commit; the other proves that commit makes that file.
 
-**And you can rebuild it yourself and get the same file.** Every timestamp in both archives is pinned, so the build is reproducible — a GitHub runner and a laptop building this commit produce byte-identical archives:
-
-```
-git clone --branch v{version} https://github.com/{REPO}
-cd sf-home-finder && python scripts/build_release.py
-shasum -a 256 dist/SF-Home-Finder-{version}-macOS-arm64.tar.xz
-```
-
-The digest matches the one above. Between the two, the chain from the source you can read to the file you run has no step that asks you to trust me.
+`INSTALL-REPORT-{version}.md` below lists every path the install created on a clean machine, recorded by the runner that built this. Nothing needs a password, and it writes only to `~/Library/Application Support` and `~/.local/bin`.
 
 </details>
 """ if installer_digest else ""
@@ -185,19 +164,17 @@ curl -fsSL https://raw.githubusercontent.com/{REPO}/HEAD/install.sh | bash
 *Changed your mind later? `homefinder uninstall` removes it — the app, the login item, all of it. Your saved homes stay unless you ask for those too.*
 
 <details>
-<summary>Happy to be counted? There is a second line for that.</summary>
+<summary>Happy to be counted?</summary>
 
 <br>
 
-The install above comes straight from GitHub and tells me nothing. If you do not mind being counted, use this instead:
+The install above tells me nothing. If you do not mind being counted, use this instead — the same script, through a [worker](https://github.com/{REPO}/blob/v{version}/deploy/install-counter/worker.js) that adds one to a tally:
 
 ```
 curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
 ```
 
-Same script, handed through a [Cloudflare worker](https://github.com/{REPO}/blob/v{version}/deploy/install-counter/worker.js) that adds one to a tally and changes nothing else. No address is stored — yours is salted with a secret and the date, hashed, and only the hash is kept, so it cannot be turned back into an IP or followed from one day to the next.
-
-It is the only way I have of knowing whether anyone uses this. Entirely your call.
+No address is kept: yours is salted with a secret and the date, hashed, and only the hash is stored, so tomorrow the same laptop looks like a different one. It is the only way I know whether anyone uses this — entirely your call.
 
 </details>
 {verify}{windows_install}
