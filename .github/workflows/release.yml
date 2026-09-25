@@ -108,13 +108,30 @@ jobs:
         # withhold a release that is otherwise ready.
         continue-on-error: true
         run: |
+          mkdir -p "$RUNNER_TEMP/under-report"
+          tar -xJf "dist/SF-Home-Finder-$VERSION-macOS-arm64.tar.xz" -C "$RUNNER_TEMP/under-report"
+          # The release root is found rather than assumed, and handed over as
+          # the argument the installer takes for it. Left to work it out from
+          # its own path it resolved one level too high, looked for the
+          # payload beside itself instead of under it, and stopped with "the
+          # release is incomplete" -- on a report that then said, truthfully
+          # and uselessly, that installing had created no files at all.
+          root="$(find "$RUNNER_TEMP/under-report" -maxdepth 3 -type f -path '*/payload/install.sh' | head -1)"
+          root="${root%/payload/install.sh}"
+          [ -n "$root" ] || { echo "::warning::no payload installer in the tarball"; exit 0; }
+
           python scripts/install_report.py snapshot --out "$RUNNER_TEMP/before.json"
-          tar -xJf "dist/SF-Home-Finder-$VERSION-macOS-arm64.tar.xz" -C "$RUNNER_TEMP"
-          # No browser to open and no login item on a runner that is about to
-          # be destroyed; everything else runs exactly as it does for a person.
-          SF_HOUSING_NO_BROWSER=1 SF_HOUSING_NO_LAUNCH_AGENT=1 \
-            bash "$RUNNER_TEMP/SF-Home-Finder-$VERSION-macOS-arm64/payload/install.sh" \
-            || echo "::warning::the install under report did not finish"
+          # Only the browser is held back. The login item is registered for
+          # real, because whether this app arranges to start on its own is
+          # exactly what somebody reading the report wants to know, and a
+          # runner has no login session of its own to protect.
+          if ! SF_HOUSING_NO_BROWSER=1 bash "$root/payload/install.sh" "$root"; then
+            # A report from an install that did not finish would describe a
+            # machine nothing was installed on, and say so in the confident
+            # voice of a report. Better to publish none.
+            echo "::warning::the install under report did not finish; no report published"
+            exit 0
+          fi
           python scripts/install_report.py snapshot --out "$RUNNER_TEMP/after.json"
           python scripts/install_report.py report \
             --before "$RUNNER_TEMP/before.json" --after "$RUNNER_TEMP/after.json" \
@@ -129,16 +146,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Unquoted on purpose: absent, it has to expand to no argument at
+          # all rather than to an empty one gh would reject.
+          REPORT=""
+          [ -f "dist/INSTALL-REPORT-$VERSION.md" ] && REPORT="dist/INSTALL-REPORT-$VERSION.md"
           # A release may already exist -- the tag can be pushed before this
           # runs, or a run can be retried after a half-finished upload. Create
           # it if it is not there, and otherwise replace what is.
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "SF Home Finder $VERSION" --notes-file "$RUNNER_TEMP/body.md"
             gh release upload "$TAG" dist/SF-Home-Finder-"$VERSION"-*.tar.xz \
-              dist/SF-Home-Finder-"$VERSION"-*.zip dist/INSTALL-REPORT-"$VERSION".md --clobber
+              dist/SF-Home-Finder-"$VERSION"-*.zip $REPORT --clobber
           else
             gh release create "$TAG" dist/SF-Home-Finder-"$VERSION"-*.tar.xz \
-              dist/SF-Home-Finder-"$VERSION"-*.zip dist/INSTALL-REPORT-"$VERSION".md \
+              dist/SF-Home-Finder-"$VERSION"-*.zip $REPORT \
               --title "SF Home Finder $VERSION" --notes-file "$RUNNER_TEMP/body.md"
           fi
 
