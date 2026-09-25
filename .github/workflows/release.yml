@@ -1,0 +1,127 @@
+name: Release
+
+# Who built the file you downloaded.
+#
+# Until this existed the answer was "the author's laptop", and there was no
+# way for anybody else to check that the archive on the release page was built
+# from the source on the release page. Somebody declined to install over
+# exactly that, and they were right to: a published binary with no provenance
+# asks for trust that cannot be given or withheld on evidence.
+#
+# So the release is built here, attested here, and uploaded here. GitHub signs
+# a record tying each archive to this workflow and this commit, and anyone can
+# check it without trusting the author or the author's machine:
+#
+#   gh attestation verify SF-Home-Finder-0.5.24-macOS-arm64.tar.xz \
+#     -R 2millerhenry/sf-home-finder
+#
+# That is half the chain. The other half is that the build is reproducible --
+# scripts/build_release.py pins every timestamp in both archives, so two
+# builds of one commit are byte for byte the same file. Attestation proves
+# this archive came from that commit; reproducibility proves that commit
+# really produces this archive. Together they take the author out of the
+# middle entirely.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and attest, but publish nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write      # create the release and upload its archives
+  id-token: write      # sign the provenance attestation
+  attestations: write  # record it against the repository
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false  # never kill a publish half way through
+
+jobs:
+  release:
+    name: Build, attest and publish
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.8"
+
+      - name: The tag and the version agree
+        # A tag of v0.5.25 on a tree that still says 0.5.24 publishes archives
+        # named for one version under a release named for another, and the
+        # installer's own version check then fails on somebody else's machine.
+        # Cheap to check here, miserable to find there.
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=v$version" >> "$GITHUB_ENV"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v$version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match pyproject version $version"
+            exit 1
+          fi
+
+      - name: Run the suite
+        # Nothing is published from a red tree. This is the same command CI
+        # runs on every push; it is repeated rather than depended on because a
+        # tag can be pushed at a commit CI has not finished, or has never seen.
+        run: uv run --managed-python --python 3.12 --extra test pytest -q
+
+      - name: Build both macOS archives and the Windows one
+        run: |
+          python scripts/build_release.py --uv-bin "$(command -v uv)"
+          python scripts/build_windows_release.py --uv-bin "$(command -v uv)"
+          ls -l dist/
+
+      - name: Every archive the release will carry is here
+        # The attestation step globs, and a glob that matches nothing succeeds
+        # quietly -- which would publish a release whose archives are attested
+        # by nothing at all, looking exactly like one that is.
+        run: |
+          for suffix in macOS-arm64.tar.xz macOS-arm64.zip Windows-x64.zip; do
+            file="dist/SF-Home-Finder-$VERSION-$suffix"
+            [ -f "$file" ] || { echo "::error::$file was not built"; exit 1; }
+          done
+
+      - name: Attest what was built
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/SF-Home-Finder-${{ env.VERSION }}-macOS-arm64.tar.xz
+            dist/SF-Home-Finder-${{ env.VERSION }}-macOS-arm64.zip
+            dist/SF-Home-Finder-${{ env.VERSION }}-Windows-x64.zip
+
+      - name: Write the release page
+        run: python scripts/release_page.py "$VERSION" > "$RUNNER_TEMP/body.md"
+
+      - name: Publish
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A release may already exist -- the tag can be pushed before this
+          # runs, or a run can be retried after a half-finished upload. Create
+          # it if it is not there, and otherwise replace what is.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "SF Home Finder $VERSION" --notes-file "$RUNNER_TEMP/body.md"
+            gh release upload "$TAG" dist/SF-Home-Finder-"$VERSION"-*.tar.xz \
+              dist/SF-Home-Finder-"$VERSION"-*.zip --clobber
+          else
+            gh release create "$TAG" dist/SF-Home-Finder-"$VERSION"-*.tar.xz \
+              dist/SF-Home-Finder-"$VERSION"-*.zip \
+              --title "SF Home Finder $VERSION" --notes-file "$RUNNER_TEMP/body.md"
+          fi
+
+      - name: What a dry run produced
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: |
+          echo "Nothing was published. Built and attested:"
+          shasum -a 256 dist/SF-Home-Finder-"$VERSION"-*.tar.xz dist/SF-Home-Finder-"$VERSION"-*.zip
