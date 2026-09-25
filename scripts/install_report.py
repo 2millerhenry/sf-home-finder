@@ -72,9 +72,18 @@ def _digest(path: Path) -> str:
 # is invisible in a size alone. Everything else is recorded by size and mode
 # only: a snapshot run on somebody's own Mac walks past every other app's
 # private data, and there is no reason for this to open any of it.
+# Every name this app goes by on disk. "SF Housing Monitor" is the one that
+# matters and the one easiest to forget: the product was renamed years after
+# the folder was, so the app a person installs as SF Home Finder lives in a
+# directory called something else. Leaving it out of this list made a report
+# that walked past the entire installation and announced that three files had
+# been created.
+OURS = ("sf housing monitor", "sf home finder", "sfhousing", "sf-home-finder", "homefinder")
+
+
 def _ours(path: Path) -> bool:
-    text = str(path)
-    return "SF Home Finder" in text or "sfhousing" in text or "homefinder" in text
+    text = str(path).casefold()
+    return any(name in text for name in OURS)
 
 
 def _record(path: Path, read_bytes: bool = False) -> dict:
@@ -143,8 +152,16 @@ def _agents() -> list[str]:
     labels = []
     for line in listing.splitlines()[1:]:
         parts = line.split("\t")
-        if len(parts) == 3 and parts[2].strip():
-            labels.append(parts[2].strip())
+        if len(parts) != 3 or not parts[2].strip():
+            continue
+        label = parts[2].strip()
+        # macOS starts and stops its own agents constantly -- seventeen
+        # mdworkers came and went between two snapshots a second apart -- and
+        # listing those as things the install registered is noise that buries
+        # the one line that matters.
+        if label.startswith("com.apple."):
+            continue
+        labels.append(label)
     return sorted(labels)
 
 

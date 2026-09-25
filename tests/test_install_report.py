@@ -110,3 +110,29 @@ def test_the_report_says_how_to_undo_the_install() -> None:
     empty = {"paths": {}, "agents": []}
 
     assert "homefinder uninstall" in install_report.report(empty, empty, "0.0.1")
+
+
+def test_the_app_is_recognised_by_the_name_its_folder_actually_has() -> None:
+    """The product is SF Home Finder; the folder is "SF Housing Monitor".
+
+    It was renamed years after the directory was, and a check that knew only
+    the new name walked straight past the entire installation -- the report
+    from a real runner said three files had been created.
+    """
+    from pathlib import Path as P
+
+    assert install_report._ours(P("~/Library/Application Support/SF Housing Monitor/tools").expanduser())
+    assert install_report._ours(P("/Users/x/.local/bin/homefinder"))
+    assert not install_report._ours(P("/Users/x/Library/Application Support/Some Other App"))
+
+
+def test_the_operating_system_s_own_agents_are_not_reported_as_ours() -> None:
+    """Seventeen mdworkers came and went between two snapshots a second
+    apart. Listing those buries the one line that matters."""
+    before = {"paths": {}, "agents": []}
+    after = {"paths": {}, "agents": ["com.sfhousing.monitor"]}
+
+    written = install_report.report(before, after, "0.0.1")
+
+    assert "**1** login item registered" in written
+    assert "com.sfhousing.monitor" in written
