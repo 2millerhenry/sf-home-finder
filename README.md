@@ -31,6 +31,35 @@ curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | 
 <sub>*12 MB download · about 2–3 minutes · roughly 155 MB on disk when it is done · no password,
 no admin*</sub>
 
+<details>
+<summary><b>Rather not pipe a URL into bash?</b> Read it first.</summary>
+
+<br>
+
+Fair — that command asks you to run code you have not read, from a host you cannot audit. Here
+is the same install with neither of those:
+
+```
+curl -fsSL -o install.sh https://raw.githubusercontent.com/2millerhenry/sf-home-finder/HEAD/install.sh
+less install.sh
+bash install.sh
+```
+
+Pin it to a release tag instead of `HEAD` — `.../sf-home-finder/v0.5.24/install.sh` — and the
+file cannot change between reading it and running it. Every release publishes that script's
+SHA-256 in its notes.
+
+The one-line command is the same script, served through a
+[Cloudflare worker](deploy/install-counter/worker.js) that counts installs once per address per
+day and changes nothing else. Fetching from GitHub directly costs you nothing and me one number.
+
+Or skip scripts entirely: download the ZIP below, check it against the checksum in the release
+notes, and read `payload/install.sh` before running it. The install needs no password and no
+administrator, and writes only to `~/Library/Application Support/SF Home Finder` and
+`~/.local/bin`.
+
+</details>
+
 **Works on** a Mac with Apple Silicon — an M1 or newer — on macOS 15.6 or later, and on
 Windows 10 or 11, 64-bit. Not Intel Macs. The command above is the Mac one; Windows is a
 download, [just below](#on-windows).

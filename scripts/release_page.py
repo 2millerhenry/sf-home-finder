@@ -102,6 +102,41 @@ Not in this release. The most recent Windows build is on an [earlier release](ht
 """ % REPO
         windows_checksum = ""
 
+    # The install script's own checksum, and a tag-pinned URL for it. Piping
+    # a URL to bash asks somebody to run code they have not read, from a host
+    # that could serve them something other than what it serves a reviewer.
+    # Both are fair objections and neither needs answering with trust: the tag
+    # is immutable, so the file read is the file run, and the digest says the
+    # file is the one this release was cut from.
+    installer = ROOT / "install.sh"
+    installer_digest = hashlib.sha256(installer.read_bytes()).hexdigest() if installer.is_file() else ""
+    verify = f"""
+<details>
+<summary>Rather not pipe a URL into bash? Read it first.</summary>
+
+<br>
+
+Fair. That command asks you to run code you have not read, served by a host you have no way to audit. Here is the same install with neither of those:
+
+```
+curl -fsSL -o install.sh https://raw.githubusercontent.com/{REPO}/v{version}/install.sh
+less install.sh
+bash install.sh
+```
+
+A tag is immutable, so the file you read is the file you run, and it comes straight from the repository with nothing in between. Its checksum for this release:
+
+```
+{installer_digest}  install.sh
+```
+
+The one-line command above is the same script, served through a Cloudflare worker that counts installs and changes nothing else ([its source is here](https://github.com/{REPO}/blob/v{version}/deploy/install-counter/worker.js)). Using the URL on this line instead costs you nothing and me one number.
+
+Or skip scripts altogether: download the ZIP below, check it against its checksum, and read `payload/install.sh` before you run it. Nothing in this install needs a password or an administrator, and it only writes to `~/Library/Application Support/SF Home Finder` and `~/.local/bin`.
+
+</details>
+""" if installer_digest else ""
+
     print(f"""SF housing is miserable. Finding a place feels impossible, and paying for it is even worse.
 
 SF Home Finder watches 18 rental sites, from public housing listings to Zillow, and refreshes twice a day. It ranks every place by your budget, neighborhoods, and everything else you care about. Free forever. No ads. Runs entirely on your laptop.
@@ -121,7 +156,7 @@ curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | 
 ```
 
 *{mac_size} · no password, no admin · your browser opens by itself when it is done*
-{windows_install}
+{verify}{windows_install}
 Once it opens, fill in **Your deal**, press save, and the first search starts.
 
 ## Opening it later
