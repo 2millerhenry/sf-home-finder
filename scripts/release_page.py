@@ -135,6 +135,31 @@ The one-line command above is the same script, served through a Cloudflare worke
 Or skip scripts altogether: download the ZIP below, check it against its checksum, and read `payload/install.sh` before you run it. Nothing in this install needs a password or an administrator, and it only writes to `~/Library/Application Support/SF Home Finder` and `~/.local/bin`.
 
 </details>
+
+<details>
+<summary>Check that this download was built from this source.</summary>
+
+<br>
+
+**GitHub built it, and signed a record saying so.** Nothing here was uploaded from anybody's laptop:
+
+```
+gh attestation verify SF-Home-Finder-{version}-macOS-arm64.tar.xz -R {REPO}
+```
+
+That names the workflow and the exact commit the archive was built from.
+
+**And you can rebuild it yourself and get the same file.** Every timestamp in both archives is pinned, so the build is reproducible — a GitHub runner and a laptop building this commit produce byte-identical archives:
+
+```
+git clone --branch v{version} https://github.com/{REPO}
+cd sf-home-finder && python scripts/build_release.py
+shasum -a 256 dist/SF-Home-Finder-{version}-macOS-arm64.tar.xz
+```
+
+The digest matches the one above. Between the two, the chain from the source you can read to the file you run has no step that asks you to trust me.
+
+</details>
 """ if installer_digest else ""
 
     print(f"""SF housing is miserable. Finding a place feels impossible, and paying for it is even worse.

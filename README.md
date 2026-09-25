@@ -60,6 +60,27 @@ administrator, and writes only to `~/Library/Application Support/SF Home Finder`
 
 </details>
 
+<details>
+<summary><b>Want to check the download was built from this source?</b></summary>
+
+<br>
+
+Releases are built by [GitHub Actions](.github/workflows/release.yml), not on anybody's laptop,
+and GitHub signs a record tying each archive to the workflow and commit that produced it:
+
+```
+gh attestation verify SF-Home-Finder-0.5.24-macOS-arm64.tar.xz -R 2millerhenry/sf-home-finder
+```
+
+The build is also reproducible — every timestamp in both archives is pinned, so a GitHub runner
+and a laptop building the same commit produce byte-identical files. Clone the tag, run
+`python scripts/build_release.py`, and the checksum matches the one in the release notes.
+
+Attestation says this archive came from that commit. Reproducibility says that commit really
+makes this archive. Together there is no step that asks you to trust me.
+
+</details>
+
 **Works on** a Mac with Apple Silicon — an M1 or newer — on macOS 15.6 or later, and on
 Windows 10 or 11, 64-bit. Not Intel Macs. The command above is the Mac one; Windows is a
 download, [just below](#on-windows).
