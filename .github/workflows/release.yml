@@ -99,6 +99,28 @@ jobs:
             dist/SF-Home-Finder-${{ env.VERSION }}-macOS-arm64.zip
             dist/SF-Home-Finder-${{ env.VERSION }}-Windows-x64.zip
 
+      - name: What the install does to a clean machine
+        # Prose about what an installer touches is written by the person who
+        # wrote the installer. This is a diff instead: a runner that has never
+        # seen the app records itself, installs the release, records itself
+        # again, and the difference ships beside the download. Never fatal --
+        # a report that cannot be produced is a missing file, not a reason to
+        # withhold a release that is otherwise ready.
+        continue-on-error: true
+        run: |
+          python scripts/install_report.py snapshot --out "$RUNNER_TEMP/before.json"
+          tar -xJf "dist/SF-Home-Finder-$VERSION-macOS-arm64.tar.xz" -C "$RUNNER_TEMP"
+          # No browser to open and no login item on a runner that is about to
+          # be destroyed; everything else runs exactly as it does for a person.
+          SF_HOUSING_NO_BROWSER=1 SF_HOUSING_NO_LAUNCH_AGENT=1 \
+            bash "$RUNNER_TEMP/SF-Home-Finder-$VERSION-macOS-arm64/payload/install.sh" \
+            || echo "::warning::the install under report did not finish"
+          python scripts/install_report.py snapshot --out "$RUNNER_TEMP/after.json"
+          python scripts/install_report.py report \
+            --before "$RUNNER_TEMP/before.json" --after "$RUNNER_TEMP/after.json" \
+            --version "$VERSION" --out "dist/INSTALL-REPORT-$VERSION.md"
+          cat "dist/INSTALL-REPORT-$VERSION.md"
+
       - name: Write the release page
         run: python scripts/release_page.py "$VERSION" > "$RUNNER_TEMP/body.md"
 
@@ -113,10 +135,10 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "SF Home Finder $VERSION" --notes-file "$RUNNER_TEMP/body.md"
             gh release upload "$TAG" dist/SF-Home-Finder-"$VERSION"-*.tar.xz \
-              dist/SF-Home-Finder-"$VERSION"-*.zip --clobber
+              dist/SF-Home-Finder-"$VERSION"-*.zip dist/INSTALL-REPORT-"$VERSION".md --clobber
           else
             gh release create "$TAG" dist/SF-Home-Finder-"$VERSION"-*.tar.xz \
-              dist/SF-Home-Finder-"$VERSION"-*.zip \
+              dist/SF-Home-Finder-"$VERSION"-*.zip dist/INSTALL-REPORT-"$VERSION".md \
               --title "SF Home Finder $VERSION" --notes-file "$RUNNER_TEMP/body.md"
           fi
 
