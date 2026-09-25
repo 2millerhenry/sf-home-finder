@@ -130,7 +130,7 @@ A tag is immutable, so the file you read is the file you run, and it comes strai
 {installer_digest}  install.sh
 ```
 
-The one-line command above is the same script, served through a Cloudflare worker that counts installs and changes nothing else ([its source is here](https://github.com/{REPO}/blob/v{version}/deploy/install-counter/worker.js)). Using the URL on this line instead costs you nothing and me one number.
+The command at the top of this page fetches the same script from the same place, unpinned so it always installs the newest release.
 
 Or skip scripts altogether: download the ZIP below, check it against its checksum, and read `payload/install.sh` before you run it. Nothing in this install needs a password or an administrator, and it only writes to `~/Library/Application Support/SF Home Finder` and `~/.local/bin`.
 
@@ -177,10 +177,29 @@ Takes about three minutes and never asks for a password.
 Apple Silicon (M1 or later), macOS 15.6 or newer. Intel Macs are not supported yet. Paste this into Terminal:
 
 ```
-curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/{REPO}/HEAD/install.sh | bash
 ```
 
 *{mac_size} · no password, no admin · your browser opens by itself when it is done*
+
+*Changed your mind later? `homefinder uninstall` removes it — the app, the login item, all of it. Your saved homes stay unless you ask for those too.*
+
+<details>
+<summary>Happy to be counted? There is a second line for that.</summary>
+
+<br>
+
+The install above comes straight from GitHub and tells me nothing. If you do not mind being counted, use this instead:
+
+```
+curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
+```
+
+Same script, handed through a [Cloudflare worker](https://github.com/{REPO}/blob/v{version}/deploy/install-counter/worker.js) that adds one to a tally and changes nothing else. No address is stored — yours is salted with a secret and the date, hashed, and only the hash is kept, so it cannot be turned back into an IP or followed from one day to the next.
+
+It is the only way I have of knowing whether anyone uses this. Entirely your call.
+
+</details>
 {verify}{windows_install}
 Once it opens, fill in **Your deal**, press save, and the first search starts.
 

@@ -25,33 +25,31 @@ Open **Terminal** — press `Cmd` + `Space`, type `Terminal`, press Return — t
 press Return:
 
 ```
-curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/2millerhenry/sf-home-finder/HEAD/install.sh | bash
 ```
 
 <sub>*12 MB download · about 2–3 minutes · roughly 155 MB on disk when it is done · no password,
 no admin*</sub>
+
+<sub>*Changed your mind later? `homefinder uninstall` removes it — the app, the login item, all
+of it. Your saved homes stay unless you ask for those too.*</sub>
 
 <details>
 <summary><b>Rather not pipe a URL into bash?</b> Read it first.</summary>
 
 <br>
 
-Fair — that command asks you to run code you have not read, from a host you cannot audit. Here
-is the same install with neither of those:
+Fair — that command asks you to run code you have not read. Here it is with that fixed:
 
 ```
-curl -fsSL -o install.sh https://raw.githubusercontent.com/2millerhenry/sf-home-finder/HEAD/install.sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/2millerhenry/sf-home-finder/v0.5.24/install.sh
 less install.sh
 bash install.sh
 ```
 
-Pin it to a release tag instead of `HEAD` — `.../sf-home-finder/v0.5.24/install.sh` — and the
-file cannot change between reading it and running it. Every release publishes that script's
-SHA-256 in its notes.
-
-The one-line command is the same script, served through a
-[Cloudflare worker](deploy/install-counter/worker.js) that counts installs once per address per
-day and changes nothing else. Fetching from GitHub directly costs you nothing and me one number.
+That URL is pinned to a release tag, so the file cannot change between reading it and running
+it, and every release publishes its SHA-256. The command at the top fetches the same script
+from the same place, unpinned so it always installs the newest version.
 
 Or skip scripts entirely: download the ZIP below, check it against the checksum in the release
 notes, and read `payload/install.sh` before running it. The install needs no password and no
@@ -78,6 +76,27 @@ and a laptop building the same commit produce byte-identical files. Clone the ta
 
 Attestation says this archive came from that commit. Reproducibility says that commit really
 makes this archive. Together there is no step that asks you to trust me.
+
+</details>
+
+<details>
+<summary><b>Happy to be counted?</b> There is a second line for that.</summary>
+
+<br>
+
+The install above comes straight from GitHub and tells me nothing. If you do not mind being
+counted, use this instead:
+
+```
+curl -fsSL https://sf-home-finder-install.sfhomefinder.workers.dev/install.sh | bash
+```
+
+It is the same script, handed through a [Cloudflare worker](deploy/install-counter/worker.js)
+that adds one to a tally and changes nothing else. No address is stored — yours is salted with
+a secret and the date, hashed, and only the hash is kept, so it cannot be turned back into an
+IP or followed from one day to the next.
+
+It is the only way I have of knowing whether anyone uses this. Entirely your call.
 
 </details>
 
